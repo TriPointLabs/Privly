@@ -30,6 +30,8 @@ jobs:
 
       - name: Build JS
         run: npx vite build
+        env:
+          VITE_GLOBAL_CLIENT_ID: ${{ vars.VITE_GLOBAL_CLIENT_ID }}
 
       - name: Build Chrome zip
         run: |

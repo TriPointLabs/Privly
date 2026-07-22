@@ -1,0 +1,148 @@
+@import "tailwindcss";
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes fade-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+@keyframes slide-in-from-right {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+@keyframes slide-out-to-right {
+  from { transform: translateX(0); }
+  to   { transform: translateX(100%); }
+}
+
+@theme {
+  --animate-fade-in:              fade-in 150ms ease-out;
+  --animate-fade-out:             fade-out 150ms ease-in;
+  --animate-slide-in-from-right:  slide-in-from-right 200ms ease-out;
+  --animate-slide-out-to-right:   slide-out-to-right 200ms ease-in;
+
+  --color-brand-primary:   #4508BA;
+  --color-brand-secondary: #5F6BFF;
+  --color-brand-tertiary:  #0DF7F0;
+
+  /* Surface colors (dark defaults -- overridden under .light) */
+  --color-surface-900: #0d0b14;
+  --color-surface-800: #13101f;
+  --color-surface-700: #1c1830;
+  --color-surface-600: #252140;
+  --color-surface-500: #2e2a52;
+  --color-surface-400: #3d3866;
+
+  /* Semantic text tokens (dark defaults -- overridden under .light) */
+  --color-text-primary:   rgba(255, 255, 255, 0.90);
+  --color-text-secondary: rgba(255, 255, 255, 0.80);
+  --color-text-tertiary:  rgba(255, 255, 255, 0.60);
+  --color-text-muted:     rgba(255, 255, 255, 0.50);
+  --color-text-faint:     rgba(255, 255, 255, 0.40);
+  --color-text-disabled:  rgba(255, 255, 255, 0.30);
+  --color-text-ghost:     rgba(255, 255, 255, 0.20);
+  --color-text-on-brand:  #ffffff;
+
+  /* Overlay, border, and interactive tokens */
+  --color-overlay:        rgba(0, 0, 0, 0.50);
+  --color-overlay-heavy:  rgba(0, 0, 0, 0.60);
+  --color-toggle-knob:    #ffffff;
+  --color-border-subtle:  rgba(255, 255, 255, 0.05);
+  --color-border-default: rgba(255, 255, 255, 0.10);
+
+  /* Status tokens (dark defaults) */
+  --color-status-amber:        #fcd34d;
+  --color-status-amber-muted:  rgba(245, 158, 11, 0.25);
+  --color-status-amber-border: rgba(245, 158, 11, 0.40);
+  --color-status-red:          #f87171;
+  --color-status-red-muted:    rgba(239, 68, 68, 0.20);
+  --color-status-red-border:   rgba(239, 68, 68, 0.35);
+  --color-status-green:        #4ade80;
+  --color-status-green-muted:  rgba(34, 197, 94, 0.20);
+  --color-status-green-border: rgba(34, 197, 94, 0.35);
+}
+
+/* Light theme overrides -- applied when html has class="light" */
+.light {
+  --color-brand-secondary: #4A54CC;
+  --color-brand-tertiary:  #0A8A85;
+
+  --color-surface-900: #f7f5fc;
+  --color-surface-800: #edeafc;
+  --color-surface-700: #e4e0f7;
+  --color-surface-600: #d2cced;
+  --color-surface-500: #bcb5e0;
+  --color-surface-400: #a29bd0;
+
+  --color-text-primary:   rgba(0, 0, 0, 0.87);
+  --color-text-secondary: rgba(0, 0, 0, 0.75);
+  --color-text-tertiary:  rgba(0, 0, 0, 0.60);
+  --color-text-muted:     rgba(0, 0, 0, 0.50);
+  --color-text-faint:     rgba(0, 0, 0, 0.55);
+  --color-text-disabled:  rgba(0, 0, 0, 0.30);
+  --color-text-ghost:     rgba(0, 0, 0, 0.20);
+  --color-text-on-brand:  #ffffff;
+
+  --color-overlay:        rgba(0, 0, 0, 0.25);
+  --color-overlay-heavy:  rgba(0, 0, 0, 0.40);
+  --color-toggle-knob:    #ffffff;
+  --color-border-subtle:  rgba(0, 0, 0, 0.06);
+  --color-border-default: rgba(0, 0, 0, 0.12);
+
+  /* Status tokens (light overrides -- darker for light backgrounds) */
+  --color-status-amber:        #b45309;
+  --color-status-amber-muted:  rgba(245, 158, 11, 0.15);
+  --color-status-amber-border: rgba(245, 158, 11, 0.30);
+  --color-status-red:          #dc2626;
+  --color-status-red-muted:    rgba(239, 68, 68, 0.12);
+  --color-status-red-border:   rgba(239, 68, 68, 0.30);
+  --color-status-green:        #16a34a;
+  --color-status-green-muted:  rgba(34, 197, 94, 0.12);
+  --color-status-green-border: rgba(34, 197, 94, 0.30);
+}
+
+@layer components {
+
+  /* Collapsible section disclosure button — 5 instances */
+  .section-toggle {
+    @apply flex items-center gap-1.5 text-[11px] font-semibold text-text-faint uppercase tracking-wider px-0.5 hover:text-text-tertiary transition-colors w-full;
+  }
+
+  /* Chevron icon inside a section-toggle — 5 instances */
+  .section-toggle-icon {
+    @apply w-4 h-4 transition-transform duration-200;
+  }
+
+  /* Subordinate collapsible sub-section toggle — used inside Eligible Activations */
+  .subsection-toggle {
+    @apply flex items-center gap-1.5 text-[10px] font-semibold text-text-disabled uppercase tracking-wider px-1 hover:text-text-muted transition-colors w-full;
+  }
+
+  /* Detail / policy info row — 12+ instances in DetailPage */
+  .detail-row {
+    @apply flex justify-between items-center px-3 py-2.5 bg-surface-800;
+  }
+
+  /* Form control base (input / select / textarea) — 3 components */
+  .field-input {
+    @apply w-full px-3 py-2 rounded-lg bg-surface-700 border border-surface-500 text-text-primary placeholder:text-text-disabled focus:outline-none focus:border-brand-secondary transition-colors;
+  }
+
+  /* Form label above a field-input — 3 components */
+  .field-label {
+    @apply text-xs text-text-tertiary font-medium uppercase tracking-wide;
+  }
+
+}
+
+html, body, #app {
+  width: 360px;
+  height: 600px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-family: system-ui, sans-serif;
+}

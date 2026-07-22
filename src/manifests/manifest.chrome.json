@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "Privly",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyVTDTBUsoPDbhwgIRYmkule3vcHrtHoJEuAYl3cT3vnJoj66jYn1dltLoun4fmq9okabc//6hU4JTglOYv8CpdnTo25FfKbu21FQIUWox4KJvAl4dUZ4WdcigK9fvTpStILesBwspyo6v9P9/Roz6iI8SsvCE29IDvDJVwFA0PVy8WHrZfPdGwFd7maHSwXkIu+G+pEYtoenmAC5gwcPG2BTNFX6rkVD5jgn/USs6k5fUn2OOfmJBTUGFnaVGlQTpP5IgkIqfjtdZd0qmjxwS5SwJA8kneaSe2hxgAFI38JbN91jZc1UHua9nlMXebItPtqnJaNH7CdKVpmnHOqliQIDAQAB",
+  "description": "Azure PIM and Entra role management in your browser",
+  "minimum_chrome_version": "126",
+  "background": {
+    "service_worker": "background/index.js",
+    "type": "module"
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "action": {
+    "default_popup": "popup/index.html",
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
+  },
+  "permissions": [
+    "identity",
+    "storage",
+    "alarms",
+    "notifications",
+    "tabs",
+    "browsingData"
+  ],
+  "host_permissions": [
+    "https://graph.microsoft.com/*",
+    "https://graph.microsoft.us/*",
+    "https://login.microsoftonline.com/*",
+    "https://login.microsoftonline.us/*",
+    "https://management.azure.com/*",
+    "https://management.usgovcloudapi.net/*",
+
+    "https://security.microsoft.com/*",
+    "https://security.microsoft.us/*",
+    "https://compliance.microsoft.com/*",
+    "https://compliance.microsoft.us/*",
+    "https://purview.microsoft.com/*",
+    "https://purview.microsoft.us/*",
+    "https://admin.microsoft.com/*",
+    "https://portal.office365.us/*",
+    "https://admin.exchange.microsoft.com/*",
+    "https://admin.teams.microsoft.com/*",
+    "https://*.admin.cloud.microsoft/*",
+    "https://*.sharepoint.com/*",
+    "https://*.sharepoint.us/*",
+    "https://portal.azure.com/*",
+    "https://portal.azure.us/*",
+    "https://entra.microsoft.com/*",
+    "https://entra.microsoft.us/*"
+  ]
+}

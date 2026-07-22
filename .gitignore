@@ -1,0 +1,10 @@
+node_modules/
+dist/
+artifacts/
+.chrome-profile/
+.firefox-profile/
+.env*
+.DS_Store
+.idea/
+graphify-out/
+.claude/settings.local.json

@@ -1,0 +1,37 @@
+{
+  "name": "privly",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "version": "2.4.0",
+  "type": "module",
+  "scripts": {
+    "dev": "NODE_ENV=development vite build --watch --mode development",
+    "dev:firefox": "BROWSER=firefox NODE_ENV=development vite build --watch --mode development",
+    "clean": "rm -rf dist .chrome-profile .firefox-profile",
+    "build:chrome": "vite build && node build/scripts/copy-manifest.js --browser chrome && npx web-ext build -o --filename {name}-{version}-chrome.zip",
+    "build:firefox": "vite build && node build/scripts/copy-manifest.js --browser firefox && npx web-ext build -o --filename {name}-{version}-firefox.zip"
+  },
+  "dependencies": {
+    "@lucide/svelte": "^1.25.0",
+    "bits-ui": "^2.16.3",
+    "idb": "^8.0.0",
+    "jose": "^6.2.2",
+    "webextension-polyfill": "^0.12.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.2.0",
+    "@tailwindcss/vite": "^4.2.1",
+    "@types/webextension-polyfill": "^0.12.5",
+    "@types/ws": "^8.5.13",
+    "svelte": "^5.0.0",
+    "tailwindcss": "^4.2.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.5",
+    "web-ext": "^10.5.0",
+    "ws": "^8.18.0"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true,
+    "fsevents@2.3.3": true
+  }
+}

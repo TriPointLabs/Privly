@@ -1,0 +1,64 @@
+name: Dev Build
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Compute version
+        run: |
+          BASE=$(node -p "require('./package.json').version")
+          echo "DEV_VERSION=${BASE}.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          echo "SHORT_SHA=${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
+
+      - name: Patch version
+        run: node build/scripts/set-version.js "$DEV_VERSION"
+
+      - name: Build JS
+        run: npx vite build
+
+      - name: Build Chrome zip
+        run: |
+          node build/scripts/copy-manifest.js --browser chrome
+          npx web-ext build \
+            --source-dir dist \
+            --artifacts-dir artifacts \
+            --filename "privly-${DEV_VERSION}-${SHORT_SHA}-chrome.zip"
+
+      - name: Upload Chrome artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: privly-${{ env.DEV_VERSION }}-${{ env.SHORT_SHA }}-chrome
+          path: artifacts/privly-${{ env.DEV_VERSION }}-${{ env.SHORT_SHA }}-chrome.zip
+
+      # Firefox steps disabled until AMO signing credentials are set up.
+      # Uncomment (and set AMO_API_KEY / AMO_API_SECRET secrets) to re-enable.
+      # - name: Sign Firefox XPI (unlisted)
+      #   run: |
+      #     node build/scripts/copy-manifest.js --browser firefox
+      #     npx web-ext sign \
+      #       --source-dir dist \
+      #       --channel unlisted \
+      #       --api-key "${{ secrets.AMO_API_KEY }}" \
+      #       --api-secret "${{ secrets.AMO_API_SECRET }}" \
+      #       --artifacts-dir artifacts
+      #
+      # - name: Upload Firefox artifact
+      #   uses: actions/upload-artifact@v7
+      #   with:
+      #     name: privly-${{ env.DEV_VERSION }}-${{ env.SHORT_SHA }}-firefox
+      #     path: artifacts/*.xpi

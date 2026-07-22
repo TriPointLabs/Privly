@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Extract version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Patch version
+        run: node build/scripts/set-version.js "$VERSION"
+
+      - name: Build JS
+        run: npx vite build
+
+      - name: Build Chrome zip
+        run: |
+          node build/scripts/copy-manifest.js --browser chrome
+          npx web-ext build \
+            --source-dir dist \
+            --artifacts-dir artifacts \
+            --filename "privly-${VERSION}-chrome.zip"
+
+      # Firefox packaging disabled until AMO signing/submission is set up.
+      # This step needs no secrets (unsigned zip); uncomment to re-enable.
+      # - name: Build Firefox zip
+      #   run: |
+      #     node build/scripts/copy-manifest.js --browser firefox
+      #     npx web-ext build \
+      #       --source-dir dist \
+      #       --artifacts-dir artifacts \
+      #       --filename "privly-${VERSION}-firefox.zip"
+
+      # Store submission (Chrome Web Store, Firefox AMO) is currently manual.
+      - name: Create GitHub release with artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" artifacts/*.zip --title "Privly $VERSION" --generate-notes

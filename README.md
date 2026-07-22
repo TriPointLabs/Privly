@@ -8,10 +8,15 @@ Privly brings Microsoft Entra and Azure PIM (Privileged Identity Management) int
 - Approve, deny, and cancel pending PIM requests, whether you are the approver or the requester
 - Expiry notifications with a configurable lead time and distinct notification sounds
 - Multiple accounts across multiple tenants at the same time
-- Sovereign cloud support: Global, GCC, GCC High, and DoD, resolved automatically at sign-in
 - Step-up authentication handled in the activation flow, including MFA and Conditional Access authentication contexts
 - Privacy focused: all data stays local in IndexedDB, and diagnostic logs are redacted before they are written
 - Built-in debug panel with a state snapshot, a per-account entitlement map, and a filterable log viewer
+
+## We Need Your Help!
+
+Privly's sign-in flow performs OpenID Connect cloud discovery and resolves the correct login, Graph, and ARM endpoints for Microsoft's sovereign clouds (GCC, GCC High, DoD). The plumbing exists, but we cannot honestly claim support without validating against a real sovereign tenant, and those are not something you can just sign up for.
+
+If your organization runs in GCC High or DoD and would like Privly there, we would love to partner with you to test and harden that support. Open an issue or reach out through [support.tripointlabs.com](https://support.tripointlabs.com).
 
 ## Requirements
 

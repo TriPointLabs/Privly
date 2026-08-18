@@ -684,13 +684,27 @@ const commandHandlers: {
  * Handles all typed commands arriving from the popup via `browser.runtime.onMessage`.
  * Registered synchronously in index.ts to satisfy the MV3 requirement.
  *
+ * Messages from anywhere other than this extension are dropped. Nothing can
+ * reach this listener today -- the manifests declare no `content_scripts` and no
+ * `externally_connectable` -- but the dispatch table includes SIGN_OUT and the
+ * activation commands, so the check is in place before either is ever added.
+ *
  * Returns a `CommandAck` for known commands, or `undefined` for messages that
  * are not commands (no response expected).
  */
-export async function handleMessage(message: unknown): Promise<unknown> {
+export async function handleMessage(
+  message: unknown,
+  sender: browser.Runtime.MessageSender,
+): Promise<unknown> {
   const msgType = typeof message === 'object' && message !== null && 'type' in message
     ? String((message as { type: unknown }).type)
     : 'unknown';
+
+  if (sender.id !== browser.runtime.id) {
+    log('warn', 'message', `Dropped ${msgType} from unexpected sender`);
+    return undefined;
+  }
+
   log('info', 'message', `${msgType} received`);
 
   const handler = (commandHandlers as Record<string, (payload: unknown) => Promise<CommandAck>>)[msgType];

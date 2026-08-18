@@ -55,6 +55,53 @@ export function isValidEmail(email: string): boolean {
 }
 
 /**
+ * Host suffixes the discovery document is allowed to point at. Every entry is
+ * matched as a full host or as a dot-prefixed suffix, so `notmicrosoft.com`
+ * does not match `.microsoft.com` and `microsoft.com.example.net` matches
+ * nothing here.
+ */
+const ALLOWED_ENDPOINT_SUFFIXES = [
+  '.microsoftonline.com',
+  '.microsoftonline.us',
+  '.microsoft.com',
+  '.microsoft.us',
+  '.azure.com',
+  '.usgovcloudapi.net',
+];
+
+/**
+ * Throws unless `rawUrl` is an HTTPS URL on a known Microsoft host.
+ *
+ * The discovery document is fetched over TLS from a hardcoded login host, so
+ * its contents are already trustworthy in normal operation. This is defence in
+ * depth: `authorizationEndpoint`, `tokenEndpoint`, `jwksUri`, and `graphHost`
+ * are persisted on the account record and subsequently receive bearer tokens
+ * and authorization codes, so an anomalous response should fail closed at
+ * sign-in rather than be written to the database.
+ * @param rawUrl - The URL to check.
+ * @param field - Discovery field name, used in the error message.
+ * @throws If the value is unparseable, not HTTPS, or not on an allowed host.
+ */
+function assertMicrosoftEndpoint(rawUrl: string, field: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error(`Cloud discovery returned an unparseable ${field}`);
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`Cloud discovery returned a non-HTTPS ${field}`);
+  }
+  const host = parsed.host.toLowerCase();
+  const allowed = ALLOWED_ENDPOINT_SUFFIXES.some(
+    suffix => host === suffix.slice(1) || host.endsWith(suffix)
+  );
+  if (!allowed) {
+    throw new Error(`Cloud discovery returned an unrecognized ${field} host: ${host}`);
+  }
+}
+
+/**
  * Fetches the OpenID Connect discovery document for `tenant` from the global
  * Microsoft login endpoint and resolves all cloud-specific metadata.
  *
@@ -69,7 +116,8 @@ export function isValidEmail(email: string): boolean {
  * is not supported.
  * @param tenant - Tenant domain (e.g. `contoso.com`) or tenant GUID.
  * @returns Fully resolved cloud metadata including endpoints and graph host.
- * @throws If the discovery request fails or a China cloud tenant is detected.
+ * @throws If the discovery request fails, a China cloud tenant is detected, or
+ *   any returned endpoint is not an HTTPS URL on a known Microsoft host.
  */
 export async function discoverCloud(tenant: string): Promise<CloudDiscovery> {
   const res = await fetch(
@@ -104,10 +152,17 @@ export async function discoverCloud(tenant: string): Promise<CloudDiscovery> {
     cloud = 'global';
   }
 
+  const graphHost = `https://${msgraph_host}`;
+  // Validate before anything derived from these values is returned or stored.
+  assertMicrosoftEndpoint(issuer, 'issuer');
+  assertMicrosoftEndpoint(jwks_uri, 'jwks_uri');
+  assertMicrosoftEndpoint(authorization_endpoint, 'authorization_endpoint');
+  assertMicrosoftEndpoint(token_endpoint, 'token_endpoint');
+  assertMicrosoftEndpoint(graphHost, 'msgraph_host');
+
   const tenantId = new URL(issuer).pathname.split('/')[1];
   const authUrl = new URL(authorization_endpoint);
   const loginHost = `${authUrl.protocol}//${authUrl.host}`;
-  const graphHost = `https://${msgraph_host}`;
 
   return {
     cloud,

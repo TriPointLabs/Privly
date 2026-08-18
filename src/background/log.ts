@@ -11,7 +11,9 @@
  * - Never log tokens, claims JSON, justification text, ticket numbers, or full
  *   message payloads.
  * - Mask UPNs/emails with `maskUpn()` and GUIDs with `shortId()` before
- *   interpolating them into a message.
+ *   interpolating them into a message. `log()` additionally runs `maskUpnsIn()`
+ *   over the finished message as a backstop for text copied verbatim out of an
+ *   error response.
  * - Role/group/scope display names, HTTP statuses, counts, durations, and
  *   Graph/ARM error codes are allowed.
  */
@@ -36,6 +38,30 @@ export function maskUpn(upn: string | null | undefined): string {
 /** Shortens a GUID/UUID to its first 8 characters: enough to correlate, not to identify. */
 export function shortId(id: string | null | undefined): string {
   return id ? id.slice(0, 8) : '(none)';
+}
+
+/**
+ * Matches an email address embedded anywhere in free text. Deliberately narrow:
+ * the local part excludes `*`, so a UPN already masked by `maskUpn()` (`d***@s***.us`)
+ * does not match and masking stays idempotent.
+ */
+const EMBEDDED_UPN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+
+/**
+ * Masks every email address found inside arbitrary text.
+ *
+ * Applied by `log()` to every message, so error strings that are passed through
+ * verbatim cannot leak a UPN. Entra `error_description` values routinely embed
+ * one (AADSTS50034: "The user account {identity} does not exist in tenant
+ * {tenant}"), and the Debug panel offers a copy-to-clipboard button that would
+ * otherwise carry it into a support ticket.
+ *
+ * Tenant, application, and correlation GUIDs are intentionally left intact --
+ * they are meaningless outside the tenant and are the fields that make a log
+ * worth reading.
+ */
+export function maskUpnsIn(text: string): string {
+  return text.replace(EMBEDDED_UPN, match => maskUpn(match));
 }
 
 // Settings are read on every log call; cache briefly so logging does not
@@ -68,11 +94,14 @@ const EVICTION_SLACK = 50;
  * builds the entry is mirrored to the console.
  */
 export function log(level: LogLevel, category: LogCategory, message: string): void {
+  // Masked here rather than at each call site so a message built from a raw
+  // error string cannot leak a UPN, whichever module produced it.
+  const safe = maskUpnsIn(message);
   if (import.meta.env.DEV) {
     const mirror = level === 'info' ? console.log : level === 'warn' ? console.warn : console.error;
-    mirror(`[privly][${category}] ${message}`);
+    mirror(`[privly][${category}] ${safe}`);
   }
-  void persist(level, category, message).catch(() => {});
+  void persist(level, category, safe).catch(() => {});
 }
 
 async function persist(level: LogLevel, category: LogCategory, message: string): Promise<void> {

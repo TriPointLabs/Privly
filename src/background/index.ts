@@ -4,7 +4,7 @@
  * Registers all top-level event listeners (required synchronously by MV3) and
  * delegates all business logic to focused modules:
  *   - auth.ts     -- token lifecycle, sign-in, step-up auth
- *   - badge.ts    -- badge count and alarm management
+ *   - badge.ts    -- badge countdown and alarm management
  *   - sync.ts     -- PIM data sync from Microsoft Graph
  *   - handlers.ts -- typed message dispatcher
  *   - utils.ts    -- shared helpers and constants
@@ -15,7 +15,7 @@
 import browser from 'webextension-polyfill';
 import { getDB, consumeMigrationInfo, DEFAULT_EXTENSION_SETTINGS } from '../tools/db.ts';
 import { notify } from '../tools/notify.ts';
-import { updateBadge, ensureAlarms, reconcilePendingApprovalAlarm } from './badge.ts';
+import { updateBadge, ensureAlarms, reconcilePendingApprovalAlarm, BADGE_ALARM } from './badge.ts';
 import { runSyncCycle, syncMyPendingRequests, syncActiveAssignments, syncActiveGroupAssignments, cleanStaleActivatingRecords } from './sync.ts';
 import { handleMessage } from './handlers.ts';
 import { log } from './log.ts';
@@ -30,7 +30,6 @@ browser.runtime.onInstalled.addListener(async () => {
   if (!existing) {
     await db.put('extension_settings', DEFAULT_EXTENSION_SETTINGS);
   }
-  await browser.action.setBadgeBackgroundColor({ color: '#7c3aed' });
   await ensureAlarms();
   await updateBadge();
 });
@@ -54,6 +53,13 @@ browser.storage.onChanged.addListener((changes, area) => {
 browser.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === EXPIRY_ALARM) {
     await checkExpiries();
+    return;
+  }
+
+  // Repaints the countdown once a minute while any activation is running.
+  // updateBadge clears this alarm itself once nothing is counting down.
+  if (alarm.name === BADGE_ALARM) {
+    await updateBadge();
     return;
   }
 
@@ -116,6 +122,8 @@ browser.alarms.onAlarm.addListener(async (alarm) => {
 cleanStaleActivatingRecords().catch(() => {});
 reconcilePendingApprovalAlarm().catch(() => {});
 checkExpiries().catch(() => {});
+// The countdown goes stale while the worker sleeps; repaint on every wake.
+updateBadge().catch(() => {});
 void getDB().then(() => {
   const m = consumeMigrationInfo();
   if (m) log('info', 'general', `Database migrated v${m.from} -> v${m.to}`);

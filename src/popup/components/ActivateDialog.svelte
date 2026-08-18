@@ -6,10 +6,11 @@
    * the policy requires them, and initial focus lands on the first required
    * field. Approval-required outcomes are handled by the caller via the ack.
    */
-  import { Dialog } from "bits-ui";
+  import { Dialog, Popover } from "bits-ui";
   import { Button, Badge, Input, Textarea, Spinner, Toggle } from './ui/index.js';
-  import { X } from '@lucide/svelte';
+  import { X, ChevronDown, Trash2 } from '@lucide/svelte';
   import type { EligibleRole, EligibleGroup } from '../../types/pim.js';
+  import type { JustificationPrefillRecord } from '../../tools/db.js';
   import { toMinutes, minutesToIso, formatMinutes } from '../utils/duration.js';
   import { getExtensionSettings } from '../../tools/db.js';
   import { MessageType, sendCommand } from '../../types/messages.js';
@@ -21,12 +22,17 @@
     justification?: string;
     ticket?: string;
     ticketSystem?: string;
+    /** True when the user asked for this justification to be remembered (CS-3). */
+    savePrefill?: boolean;
   };
 
-  let { open = $bindable(false), target, onConfirm }: {
+  let { open = $bindable(false), target, onConfirm, prefills = [], onDeletePrefill }: {
     open: boolean;
     target: { kind: 'role'; data: EligibleRole } | { kind: 'group'; data: EligibleGroup } | null;
     onConfirm: (params: ActivationParams) => Promise<void>;
+    /** Saved justifications for the active account, most recently used first. */
+    prefills?: JustificationPrefillRecord[];
+    onDeletePrefill?: (prefillId: string) => Promise<void>;
   } = $props();
 
   // Capped at 1440 because minutesToIso tops out at P1D; policies allowing
@@ -40,6 +46,8 @@
   let ticket = $state('');
   let submitting = $state(false);
   let reloadPortals = $state(true);
+  let savePrefill = $state(false);
+  let prefillPickerOpen = $state(false);
 
   // Reset form when target changes
   $effect(() => {
@@ -47,8 +55,36 @@
       durationMinutes = Math.min(toMinutes(target.data.policyRules.maximumDuration), 1440);
       justification = '';
       ticket = '';
+      savePrefill = false;
+      prefillPickerOpen = false;
     }
   });
+
+  /**
+   * Fills the justification field from a saved prefill. Chosen text is not
+   * re-saved on submit -- it is already stored, and ticking the box again would
+   * only rewrite the same row.
+   */
+  function applyPrefill(text: string) {
+    justification = text;
+    savePrefill = false;
+    prefillPickerOpen = false;
+    document.getElementById('activate-justification')?.focus();
+  }
+
+  async function removePrefill(prefillId: string) {
+    await onDeletePrefill?.(prefillId);
+    if (prefills.length <= 1) prefillPickerOpen = false;
+  }
+
+  /** True when the current text is one of the saved prefills, picked or retyped. */
+  const matchesSavedPrefill = $derived(
+    justification.trim().length > 0 && prefills.some(p => p.text === justification.trim())
+  );
+
+  // Offering to save text that is already saved would be a no-op, so the
+  // toggle only appears for justification the user actually typed.
+  const isNewJustification = $derived(justification.trim().length > 0 && !matchesSavedPrefill);
 
   // Sync reload setting from IndexedDB each time the dialog opens
   $effect(() => {
@@ -93,6 +129,9 @@
       duration: minutesToIso(durationMinutes),
       justification: justification || undefined,
       ticket: ticket || undefined,
+      // Reusing a saved justification re-sends the save so the service worker
+      // refreshes its lastUsedAt, keeping the picker in most-recently-used order.
+      savePrefill: (savePrefill && isNewJustification) || matchesSavedPrefill,
     });
     submitting = false;
   }
@@ -160,13 +199,67 @@
         </div>
 
         {#if policy?.justificationRequired}
-          <Textarea
-            label="Justification"
-            id="activate-justification"
-            bind:value={justification}
-            rows={3}
-            placeholder="Explain why you need this access..."
-          />
+          <div class="flex flex-col gap-1.5">
+            <div class="flex items-center justify-between gap-2">
+              <label for="activate-justification" class="field-label">Justification</label>
+              {#if prefills.length > 0}
+                <Popover.Root bind:open={prefillPickerOpen}>
+                  <Popover.Trigger
+                    class="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-text-tertiary hover:text-text-secondary hover:bg-surface-700 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand-secondary"
+                    aria-label="Choose a saved justification"
+                  >
+                    Saved
+                    <ChevronDown class="w-3 h-3" aria-hidden="true" />
+                  </Popover.Trigger>
+                  <Popover.Portal>
+                    <Popover.Content
+                      align="end"
+                      sideOffset={4}
+                      class="z-[60] w-64 max-h-56 overflow-y-auto rounded-lg border border-surface-600 bg-surface-800 p-1 shadow-2xl focus:outline-none"
+                    >
+                      <ul class="flex flex-col">
+                        {#each prefills as prefill (prefill.id)}
+                          <li class="flex items-center gap-1 group">
+                            <button
+                              type="button"
+                              class="flex-1 min-w-0 text-left text-xs text-text-secondary hover:text-text-primary hover:bg-surface-700 rounded px-2 py-1.5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand-secondary"
+                              onclick={() => applyPrefill(prefill.text)}
+                            >
+                              <span class="block truncate">{prefill.text}</span>
+                            </button>
+                            <Button
+                              variant="icon-danger"
+                              aria-label="Delete saved justification"
+                              onclick={() => removePrefill(prefill.id)}
+                            >
+                              <Trash2 class="w-3.5 h-3.5" aria-hidden="true" />
+                            </Button>
+                          </li>
+                        {/each}
+                      </ul>
+                    </Popover.Content>
+                  </Popover.Portal>
+                </Popover.Root>
+              {/if}
+            </div>
+            <Textarea
+              id="activate-justification"
+              bind:value={justification}
+              rows={3}
+              placeholder="Explain why you need this access..."
+            />
+            {#if isNewJustification}
+              <div class="flex items-center justify-between gap-3 pt-0.5">
+                <label for="activate-save-prefill" class="text-xs text-text-muted cursor-pointer">Save for next time</label>
+                <Toggle
+                  id="activate-save-prefill"
+                  checked={savePrefill}
+                  onchange={(val) => (savePrefill = val)}
+                  aria-label="Save this justification for next time"
+                />
+              </div>
+            {/if}
+          </div>
         {/if}
 
         {#if policy?.ticketingRequired}

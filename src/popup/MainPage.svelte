@@ -24,8 +24,8 @@
   import browser from 'webextension-polyfill';
   import { sendCommand, MessageType, type StoreName, type CommandAck } from '../types/messages.js';
   import { Eye, EyeOff } from '@lucide/svelte';
-  import { type AccountRecord, type ActivatingRecord } from '../tools/db.js';
-  import { loadAccounts, loadEligibleRoles, loadActiveAssignments, loadEligibleGroups, loadApprovals, loadPendingRequests, loadActivating, loadAzureSubscriptionGroups, type AzureSubscriptionGroup } from './data.js';
+  import { type AccountRecord, type ActivatingRecord, type JustificationPrefillRecord } from '../tools/db.js';
+  import { loadAccounts, loadEligibleRoles, loadActiveAssignments, loadEligibleGroups, loadApprovals, loadPendingRequests, loadActivating, loadAzureSubscriptionGroups, loadJustificationPrefills, type AzureSubscriptionGroup } from './data.js';
   import { toMinutes } from './utils/duration.js';
   import privlyTextColor from '../assets/privly-text-color.svg';
 
@@ -62,6 +62,7 @@
       if (stores.has('pending_requests')) refreshPendingRequests();
       if (stores.has('activating')) refreshActivating();
       if (stores.has('azure_roles') || stores.has('azure_scopes') || stores.has('azure_activations')) refreshAzureRoles();
+      if (stores.has('justification_prefills')) refreshPrefills();
     }, REFRESH_DEBOUNCE_MS);
   }
 
@@ -108,7 +109,7 @@
 
   /** Re-runs every per-account query for the active account. */
   function refreshAll(): Promise<unknown> {
-    return Promise.all([refreshRoles(), refreshActivations(), refreshGroups(), refreshApprovals(), refreshPendingRequests(), refreshActivating(), refreshAzureRoles()]);
+    return Promise.all([refreshRoles(), refreshActivations(), refreshGroups(), refreshApprovals(), refreshPendingRequests(), refreshActivating(), refreshAzureRoles(), refreshPrefills()]);
   }
 
   async function refreshRoles() {
@@ -136,6 +137,23 @@
 
   async function refreshActivating() {
     activatingRecords = activeAccountId ? await loadActivating(activeAccountId) : [];
+  }
+
+  let justificationPrefills = $state<JustificationPrefillRecord[]>([]);
+
+  async function refreshPrefills() {
+    justificationPrefills = activeAccountId ? await loadJustificationPrefills(activeAccountId) : [];
+  }
+
+  /**
+   * Removes a saved justification via the service worker. The SW fires
+   * `DB_CHANGED` for `justification_prefills`, which re-runs `refreshPrefills`,
+   * so the picker updates without any local mutation here.
+   */
+  async function handleDeletePrefill(prefillId: string): Promise<void> {
+    if (!activeAccountId) return;
+    const ack = await sendCommand(MessageType.DELETE_JUSTIFICATION_PREFILL, { accountId: activeAccountId, prefillId });
+    if (!ack.ok) addAlert('error', ack.error ?? 'Could not delete the saved justification');
   }
 
   /**
@@ -280,6 +298,7 @@
         justification: params.justification,
         ticketNumber: params.ticket,
         ticketSystem: params.ticketSystem,
+        savePrefill: params.savePrefill,
       });
     } else if (params.kind === 'role') {
       ack = await sendCommand(MessageType.ACTIVATE_ROLE, {
@@ -289,6 +308,7 @@
         justification: params.justification,
         ticketNumber: params.ticket,
         ticketSystem: params.ticketSystem,
+        savePrefill: params.savePrefill,
       });
     } else {
       ack = await sendCommand(MessageType.ACTIVATE_GROUP, {
@@ -298,6 +318,7 @@
         justification: params.justification,
         ticketNumber: params.ticket,
         ticketSystem: params.ticketSystem,
+        savePrefill: params.savePrefill,
       });
     }
 
@@ -735,4 +756,6 @@
   bind:open={activationDialogOpen}
   target={activationTarget}
   onConfirm={handleActivation}
+  prefills={justificationPrefills}
+  onDeletePrefill={handleDeletePrefill}
 />

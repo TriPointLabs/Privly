@@ -15,7 +15,7 @@ import type { ExtensionSettingsRecord } from '../tools/db.js';
 export type StoreName =
   | 'accounts' | 'role_definitions' | 'role_policies' | 'roles' | 'groups' | 'group_policies'
   | 'activations' | 'activating' | 'approvals' | 'pending_requests' | 'extension_settings' | 'states'
-  | 'azure_scopes' | 'azure_roles' | 'azure_activations' | 'azure_policies';
+  | 'azure_scopes' | 'azure_roles' | 'azure_activations' | 'azure_policies' | 'justification_prefills';
 
 // ---------------------------------------------------------------------------
 // Notifications: SW -> popup, fire-and-forget, no response
@@ -87,11 +87,18 @@ export const MessageType = {
   CANCEL_REQUEST: 'CANCEL_REQUEST',
   CLEAR_LOGS: 'CLEAR_LOGS',
   LOG_EVENT: 'LOG_EVENT',
+  DELETE_JUSTIFICATION_PREFILL: 'DELETE_JUSTIFICATION_PREFILL',
 } as const;
 
 /** Union of every message type string. */
 export type MessageType = typeof MessageType[keyof typeof MessageType];
 
+/**
+ * `savePrefill` on the activation commands asks the service worker to store the
+ * submitted justification as a reusable prefill once the request succeeds. It
+ * rides along with the activation rather than using a separate command so the
+ * dialog makes one round trip and nothing is saved for a request that failed.
+ */
 interface CommandPayloadMap {
   [MessageType.TRIGGER_SYNC]: Record<string, never>;
   [MessageType.SIGN_IN_NEW]: { username: string; tenantId?: string };
@@ -100,11 +107,11 @@ interface CommandPayloadMap {
   [MessageType.UPDATE_EXTENSION_SETTING]: { patch: Partial<Omit<ExtensionSettingsRecord, 'id'>> };
   [MessageType.UPDATE_ACCOUNT_SETTING]: { accountId: string; patch: { showPermanentAssignments?: boolean } };
   [MessageType.TEST_NOTIFICATION]: Record<string, never>;
-  [MessageType.ACTIVATE_ROLE]: { accountId: string; roleId: string; justification?: string; durationMinutes: number; ticketNumber?: string; ticketSystem?: string };
+  [MessageType.ACTIVATE_ROLE]: { accountId: string; roleId: string; justification?: string; durationMinutes: number; ticketNumber?: string; ticketSystem?: string; savePrefill?: boolean };
   [MessageType.DEACTIVATE_ROLE]: { accountId: string; activationId: string };
-  [MessageType.ACTIVATE_GROUP]: { accountId: string; groupId: string; justification?: string; durationMinutes: number; ticketNumber?: string; ticketSystem?: string };
+  [MessageType.ACTIVATE_GROUP]: { accountId: string; groupId: string; justification?: string; durationMinutes: number; ticketNumber?: string; ticketSystem?: string; savePrefill?: boolean };
   [MessageType.DEACTIVATE_GROUP]: { accountId: string; activationId: string };
-  [MessageType.ACTIVATE_AZURE_ROLE]: { accountId: string; azureRoleId: string; justification?: string; durationMinutes: number; ticketNumber?: string; ticketSystem?: string };
+  [MessageType.ACTIVATE_AZURE_ROLE]: { accountId: string; azureRoleId: string; justification?: string; durationMinutes: number; ticketNumber?: string; ticketSystem?: string; savePrefill?: boolean };
   [MessageType.DEACTIVATE_AZURE_ROLE]: { accountId: string; azureActivationId: string };
   [MessageType.APPROVE_REQUEST]: { accountId: string; approvalId: string; justification?: string };
   [MessageType.DENY_REQUEST]: { accountId: string; approvalId: string; justification?: string };
@@ -112,6 +119,8 @@ interface CommandPayloadMap {
   [MessageType.CLEAR_LOGS]: Record<string, never>;
   /** Popup-originated diagnostic entry. The SW records it under the 'popup' category. Senders must not include identifiers -- the popup has no redaction helpers. */
   [MessageType.LOG_EVENT]: { level: 'info' | 'warn' | 'error'; message: string };
+  /** Removes one saved justification prefill. Issued from the quick-pick list in the activation dialog. */
+  [MessageType.DELETE_JUSTIFICATION_PREFILL]: { accountId: string; prefillId: string };
 }
 
 /** Discriminated union of every popup -> service worker command with its typed payload. */

@@ -16,6 +16,7 @@ import {
   type AzurePolicyRecord,
   type AzureRoleRecord,
   type AzureScopeRecord,
+  type JustificationPrefillRecord,
   type LogRecord,
   type PendingRequestRecord,
 } from '../tools/db.js';
@@ -32,6 +33,17 @@ import type {
 import { parseAzureScope } from '../tools/scopeParser.js';
 import { formatDuration } from './utils/duration.js';
 import { toPolicyRules } from './utils/policy.js';
+
+/**
+ * Loads the account's saved activation justifications, most recently used
+ * first, which is the order the activation dialog's quick-pick presents them.
+ * @param accountId - `AccountRecord.id` to load prefills for.
+ */
+export async function loadJustificationPrefills(accountId: string): Promise<JustificationPrefillRecord[]> {
+  const db = await getDB();
+  const prefills = await db.getAllFromIndex('justification_prefills', 'by-account', accountId);
+  return prefills.sort((a, b) => b.lastUsedAt - a.lastUsedAt);
+}
 
 /** Loads all accounts plus the persisted active-account selection. */
 export async function loadAccounts(): Promise<{ accounts: AccountRecord[]; activeAccountId: string | null }> {

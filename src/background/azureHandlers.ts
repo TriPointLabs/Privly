@@ -18,6 +18,7 @@ import {
   PENDING_ACTIVATION_STATUSES,
 } from './utils.ts';
 import { refreshAzurePortalTabs } from './tabs.ts';
+import { saveJustificationPrefill } from './prefills.ts';
 import { log, maskUpn } from './log.ts';
 import { checkExpiries } from './expiry.ts';
 
@@ -29,7 +30,7 @@ type DeactivateAzurePayload = Extract<CommandMessage, { type: 'DEACTIVATE_AZURE_
  * while polling for provisioning, then re-syncs the Azure stores.
  */
 export async function handleActivateAzureRole(payload: ActivateAzurePayload): Promise<CommandAck> {
-  const { accountId, azureRoleId, durationMinutes, justification, ticketNumber, ticketSystem } = payload;
+  const { accountId, azureRoleId, durationMinutes, justification, ticketNumber, ticketSystem, savePrefill } = payload;
 
   const db = await getDB();
   const [account, roleRecord] = await Promise.all([
@@ -128,6 +129,9 @@ export async function handleActivateAzureRole(payload: ActivateAzurePayload): Pr
   }
 
   log('info', 'activate', `ACTIVATE_AZURE_ROLE succeeded for ${maskUpn(account.userPrincipalName)}, "${displayName}": ${finalStatus}`);
+
+  // The request was accepted, so the justification is worth keeping.
+  if (savePrefill) await saveJustificationPrefill(accountId, justification);
   if (finalStatus === 'PendingApproval') {
     await notify('Activation request submitted', `"${displayName}" is awaiting approval`);
   } else {

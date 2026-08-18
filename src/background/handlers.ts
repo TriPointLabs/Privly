@@ -46,6 +46,7 @@ import {
   PENDING_ACTIVATION_STATUSES,
 } from './utils.ts';
 import { refreshAdminPortalTabs } from './tabs.ts';
+import { saveJustificationPrefill, deleteJustificationPrefill } from './prefills.ts';
 import { log, maskUpn, shortId, refreshLogSettings, clearLogs } from './log.ts';
 import { checkExpiries } from './expiry.ts';
 
@@ -64,6 +65,8 @@ type ActivateParams = {
   justification?: string;
   ticketNumber?: string;
   ticketSystem?: string;
+  /** When true, persist `justification` as a reusable prefill once the request is accepted. */
+  savePrefill?: boolean;
 };
 
 /**
@@ -75,7 +78,7 @@ type ActivateParams = {
  * @param params - Activation parameters from the message payload.
  */
 async function handleActivate(kind: 'role' | 'group', params: ActivateParams): Promise<CommandAck> {
-  const { accountId, entityId, durationMinutes, justification, ticketNumber, ticketSystem } = params;
+  const { accountId, entityId, durationMinutes, justification, ticketNumber, ticketSystem, savePrefill } = params;
 
   const db = await getDB();
   const account = await db.get('accounts', accountId);
@@ -191,6 +194,11 @@ async function handleActivate(kind: 'role' | 'group', params: ActivateParams): P
   }
 
   log('info', 'activate', `ACTIVATE_${kind.toUpperCase()} succeeded for ${maskUpn(account.userPrincipalName)}, ${kind} ${displayName}: ${finalStatus}`);
+
+  // The request was accepted, so the justification is worth keeping. Awaiting
+  // approval counts -- the text was still submitted and will be reused.
+  if (savePrefill) await saveJustificationPrefill(accountId, justification);
+
   if (finalStatus === 'PendingApproval') {
     await notify('Activation request submitted', `"${displayName}" is awaiting approval`);
   } else {
@@ -473,7 +481,8 @@ async function handleSignOut(payload: CommandPayload<'SIGN_OUT'>): Promise<Comma
     ['accounts', 'roles', 'groups', 'activations', 'approvals',
      'pending_requests', 'activating', 'states',
      'role_definitions', 'role_policies', 'group_policies',
-     'azure_scopes', 'azure_roles', 'azure_activations', 'azure_policies'],
+     'azure_scopes', 'azure_roles', 'azure_activations', 'azure_policies',
+     'justification_prefills'],
     'readwrite'
   );
 
@@ -486,7 +495,8 @@ async function handleSignOut(payload: CommandPayload<'SIGN_OUT'>): Promise<Comma
 
   const [roleKeys, groupKeys, activationKeys, approvalKeys,
          pendingRequestKeys, activatingKeys, allStates,
-         azureScopeKeys, azureRoleKeys, azureActivationKeys, azurePolicyKeys] = await Promise.all([
+         azureScopeKeys, azureRoleKeys, azureActivationKeys, azurePolicyKeys,
+         prefillKeys] = await Promise.all([
     tx.objectStore('roles').index('by-account').getAllKeys(accountId),
     tx.objectStore('groups').index('by-account').getAllKeys(accountId),
     tx.objectStore('activations').index('by-account').getAllKeys(accountId),
@@ -498,6 +508,8 @@ async function handleSignOut(payload: CommandPayload<'SIGN_OUT'>): Promise<Comma
     tx.objectStore('azure_roles').index('by-account').getAllKeys(accountId),
     tx.objectStore('azure_activations').index('by-account').getAllKeys(accountId),
     tx.objectStore('azure_policies').index('by-account').getAllKeys(accountId),
+    // Saved justifications are user-authored free text; they leave with the account.
+    tx.objectStore('justification_prefills').index('by-account').getAllKeys(accountId),
   ]);
   const stateKeys = allStates.filter(s => s.accountId === accountId).map(s => s.id);
 
@@ -518,6 +530,7 @@ async function handleSignOut(payload: CommandPayload<'SIGN_OUT'>): Promise<Comma
     ...pendingRequestKeys.map(k => tx.objectStore('pending_requests').delete(k)),
     ...activatingKeys.map(k => tx.objectStore('activating').delete(k)),
     ...stateKeys.map(k => tx.objectStore('states').delete(k)),
+    ...prefillKeys.map(k => tx.objectStore('justification_prefills').delete(k)),
     ...azureScopeKeys.map(k => tx.objectStore('azure_scopes').delete(k)),
     ...azureRoleKeys.map(k => tx.objectStore('azure_roles').delete(k)),
     ...azureActivationKeys.map(k => tx.objectStore('azure_activations').delete(k)),
@@ -668,6 +681,7 @@ const commandHandlers: {
   APPROVE_REQUEST: (payload) => handleApprovalCommand('Approve', payload),
   DENY_REQUEST: (payload) => handleApprovalCommand('Deny', payload),
   CANCEL_REQUEST: handleCancelRequest,
+  DELETE_JUSTIFICATION_PREFILL: ({ accountId, prefillId }) => deleteJustificationPrefill(accountId, prefillId),
   CLEAR_LOGS: async () => {
     await clearLogs();
     return { ok: true };

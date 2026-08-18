@@ -723,5 +723,18 @@ export async function handleMessage(
 
   const handler = (commandHandlers as Record<string, (payload: unknown) => Promise<CommandAck>>)[msgType];
   if (!handler) return undefined;
-  return handler((message as { payload?: unknown }).payload ?? {});
+
+  // Handlers return { ok: false } for failures they anticipate, but an
+  // unexpected throw (a failed IndexedDB open, a quota error) would otherwise
+  // reject across the message boundary. webextension-polyfill reports that as
+  // "a listener's promise rejected without an Error", which tells the user
+  // nothing and leaves the popup with no message to display. Convert it into
+  // the CommandAck the caller already knows how to handle.
+  try {
+    return await handler((message as { payload?: unknown }).payload ?? {});
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    log('error', 'message', `${msgType} threw: ${error}`);
+    return { ok: false, error } satisfies CommandAck;
+  }
 }

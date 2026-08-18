@@ -141,14 +141,14 @@
 
         <div class="flex flex-col gap-0.5">
           <div class="flex items-center justify-between">
-            <label for="toggle-show-badge" class="text-sm text-text-secondary cursor-pointer">Show badge count</label>
+            <label for="toggle-show-badge" class="text-sm text-text-secondary cursor-pointer">Show time left on the icon</label>
             <Toggle
               id="toggle-show-badge"
               checked={extensionSettings.showBadge}
               onchange={(val) => sendExtensionSetting({ showBadge: val })}
             />
           </div>
-          <p class="text-xs text-text-faint pr-10">Show the number of active role assignments on the extension icon.</p>
+          <p class="text-xs text-text-faint pr-10">Show time left on the soonest-expiring role, like 42m or 2h. Blank when nothing is active.</p>
         </div>
       </div>
 

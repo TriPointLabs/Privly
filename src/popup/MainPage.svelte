@@ -24,8 +24,8 @@
   import browser from 'webextension-polyfill';
   import { sendCommand, MessageType, type StoreName, type CommandAck } from '../types/messages.js';
   import { Eye, EyeOff } from '@lucide/svelte';
-  import { type AccountRecord, type ActivatingRecord } from '../tools/db.js';
-  import { loadAccounts, loadEligibleRoles, loadActiveAssignments, loadEligibleGroups, loadApprovals, loadPendingRequests, loadActivating, loadAzureSubscriptionGroups, type AzureSubscriptionGroup } from './data.js';
+  import { type AccountRecord, type ActivatingRecord, type JustificationPrefillRecord } from '../tools/db.js';
+  import { loadAccounts, loadEligibleRoles, loadActiveAssignments, loadEligibleGroups, loadApprovals, loadPendingRequests, loadActivating, loadAzureSubscriptionGroups, loadJustificationPrefills, loadSyncRunning, type AzureSubscriptionGroup } from './data.js';
   import { toMinutes } from './utils/duration.js';
   import privlyTextColor from '../assets/privly-text-color.svg';
 
@@ -36,6 +36,17 @@
   } = $props();
 
   let syncing = $state(false);
+
+  /**
+   * Reads the persisted sync marker. The `SYNC_STATUS` broadcast only reaches a
+   * popup that is already mounted, and after the first sign-in this component
+   * mounts partway through the initial sync -- the popup having been closed by
+   * the interactive sign-in window -- so the broadcast that started it is long
+   * gone by then.
+   */
+  async function refreshSyncState() {
+    syncing = await loadSyncRunning();
+  }
 
   // A sync cycle fires 10+ DB_CHANGED notifications in bursts. Collect store
   // names for a short window and run each affected refresher once per burst
@@ -50,6 +61,10 @@
       const stores = pendingStores;
       pendingStores = new Set();
       flushTimer = null;
+      // Checked before the accounts early-return below: sign-in reports
+      // 'accounts' and 'states' in the same burst, and the early return would
+      // otherwise drop the syncing indicator on exactly the flow that needs it.
+      if (stores.has('states')) refreshSyncState();
       if (stores.has('accounts')) {
         // refreshAccounts re-runs every per-account query itself.
         refreshAccounts();
@@ -62,6 +77,7 @@
       if (stores.has('pending_requests')) refreshPendingRequests();
       if (stores.has('activating')) refreshActivating();
       if (stores.has('azure_roles') || stores.has('azure_scopes') || stores.has('azure_activations')) refreshAzureRoles();
+      if (stores.has('justification_prefills')) refreshPrefills();
     }, REFRESH_DEBOUNCE_MS);
   }
 
@@ -108,7 +124,7 @@
 
   /** Re-runs every per-account query for the active account. */
   function refreshAll(): Promise<unknown> {
-    return Promise.all([refreshRoles(), refreshActivations(), refreshGroups(), refreshApprovals(), refreshPendingRequests(), refreshActivating(), refreshAzureRoles()]);
+    return Promise.all([refreshRoles(), refreshActivations(), refreshGroups(), refreshApprovals(), refreshPendingRequests(), refreshActivating(), refreshAzureRoles(), refreshPrefills()]);
   }
 
   async function refreshRoles() {
@@ -138,6 +154,23 @@
     activatingRecords = activeAccountId ? await loadActivating(activeAccountId) : [];
   }
 
+  let justificationPrefills = $state<JustificationPrefillRecord[]>([]);
+
+  async function refreshPrefills() {
+    justificationPrefills = activeAccountId ? await loadJustificationPrefills(activeAccountId) : [];
+  }
+
+  /**
+   * Removes a saved justification via the service worker. The SW fires
+   * `DB_CHANGED` for `justification_prefills`, which re-runs `refreshPrefills`,
+   * so the picker updates without any local mutation here.
+   */
+  async function handleDeletePrefill(prefillId: string): Promise<void> {
+    if (!activeAccountId) return;
+    const ack = await sendCommand(MessageType.DELETE_JUSTIFICATION_PREFILL, { accountId: activeAccountId, prefillId });
+    if (!ack.ok) addAlert('error', ack.error ?? 'Could not delete the saved justification');
+  }
+
   /**
    * Toggles the per-account `showPermanentAssignments` setting and persists it
    * via the service worker. The SW writes to `AccountRecord` and fires
@@ -159,6 +192,7 @@
   }
 
   refreshAccounts();
+  refreshSyncState();
 
   let eligibleRoles = $state<EligibleRole[]>([]);
   const eligibleEntraRoles = $derived(eligibleRoles.filter(r => r.roleType === 'EntraRole'));
@@ -280,6 +314,7 @@
         justification: params.justification,
         ticketNumber: params.ticket,
         ticketSystem: params.ticketSystem,
+        savePrefill: params.savePrefill,
       });
     } else if (params.kind === 'role') {
       ack = await sendCommand(MessageType.ACTIVATE_ROLE, {
@@ -289,6 +324,7 @@
         justification: params.justification,
         ticketNumber: params.ticket,
         ticketSystem: params.ticketSystem,
+        savePrefill: params.savePrefill,
       });
     } else {
       ack = await sendCommand(MessageType.ACTIVATE_GROUP, {
@@ -298,6 +334,7 @@
         justification: params.justification,
         ticketNumber: params.ticket,
         ticketSystem: params.ticketSystem,
+        savePrefill: params.savePrefill,
       });
     }
 
@@ -735,4 +772,6 @@
   bind:open={activationDialogOpen}
   target={activationTarget}
   onConfirm={handleActivation}
+  prefills={justificationPrefills}
+  onDeletePrefill={handleDeletePrefill}
 />

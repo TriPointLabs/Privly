@@ -16,6 +16,9 @@ import {
   type AzurePolicyRecord,
   type AzureRoleRecord,
   type AzureScopeRecord,
+  SYNC_STATE_ID,
+  SYNC_STALE_TTL_MS,
+  type JustificationPrefillRecord,
   type LogRecord,
   type PendingRequestRecord,
 } from '../tools/db.js';
@@ -32,6 +35,31 @@ import type {
 import { parseAzureScope } from '../tools/scopeParser.js';
 import { formatDuration } from './utils/duration.js';
 import { toPolicyRules } from './utils/policy.js';
+
+/**
+ * Loads the account's saved activation justifications, most recently used
+ * first, which is the order the activation dialog's quick-pick presents them.
+ * @param accountId - `AccountRecord.id` to load prefills for.
+ */
+export async function loadJustificationPrefills(accountId: string): Promise<JustificationPrefillRecord[]> {
+  const db = await getDB();
+  const prefills = await db.getAllFromIndex('justification_prefills', 'by-account', accountId);
+  return prefills.sort((a, b) => b.lastUsedAt - a.lastUsedAt);
+}
+
+/**
+ * Reports whether a sync is currently in flight, from the persisted marker
+ * rather than the `SYNC_STATUS` broadcast, so a popup that opens mid-sync still
+ * shows the indicator. A marker older than `SYNC_STALE_TTL_MS` is ignored: the
+ * service worker clears abandoned markers on wake, and this covers the gap
+ * until it does.
+ */
+export async function loadSyncRunning(): Promise<boolean> {
+  const db = await getDB();
+  const record = await db.get('states', SYNC_STATE_ID);
+  if (!record) return false;
+  return Date.now() - record.startedAt < SYNC_STALE_TTL_MS;
+}
 
 /** Loads all accounts plus the persisted active-account selection. */
 export async function loadAccounts(): Promise<{ accounts: AccountRecord[]; activeAccountId: string | null }> {

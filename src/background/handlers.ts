@@ -34,9 +34,10 @@ import {
   syncMyPendingRequests,
   refreshSingleRolePolicy,
   refreshSingleGroupPolicy,
+  setSyncRunning,
 } from './sync.ts';
 import { updateBadge, reconcilePendingApprovalAlarm } from './badge.ts';
-import { executeActivationRequest } from './activation.ts';
+import { executeActivationRequest, confirmActivationVisible, type ExpectedActivation } from './activation.ts';
 import { handleActivateAzureRole, handleDeactivateAzureRole } from './azureHandlers.ts';
 import {
   notifyDbChanged,
@@ -46,6 +47,7 @@ import {
   PENDING_ACTIVATION_STATUSES,
 } from './utils.ts';
 import { refreshAdminPortalTabs } from './tabs.ts';
+import { saveJustificationPrefill, deleteJustificationPrefill } from './prefills.ts';
 import { log, maskUpn, shortId, refreshLogSettings, clearLogs } from './log.ts';
 import { checkExpiries } from './expiry.ts';
 
@@ -64,6 +66,8 @@ type ActivateParams = {
   justification?: string;
   ticketNumber?: string;
   ticketSystem?: string;
+  /** When true, persist `justification` as a reusable prefill once the request is accepted. */
+  savePrefill?: boolean;
 };
 
 /**
@@ -75,7 +79,7 @@ type ActivateParams = {
  * @param params - Activation parameters from the message payload.
  */
 async function handleActivate(kind: 'role' | 'group', params: ActivateParams): Promise<CommandAck> {
-  const { accountId, entityId, durationMinutes, justification, ticketNumber, ticketSystem } = params;
+  const { accountId, entityId, durationMinutes, justification, ticketNumber, ticketSystem, savePrefill } = params;
 
   const db = await getDB();
   const account = await db.get('accounts', accountId);
@@ -88,6 +92,7 @@ async function handleActivate(kind: 'role' | 'group', params: ActivateParams): P
   let policyKey: string;
   let policyStoreName: 'role_policies' | 'group_policies';
   let refreshStalePolicy: () => Promise<void>;
+  let expectActivation: ExpectedActivation;
 
   if (kind === 'role') {
     const roleRecord = await db.get('roles', entityId);
@@ -108,6 +113,7 @@ async function handleActivate(kind: 'role' | 'group', params: ActivateParams): P
     };
     policyKey = `${account.tenantId}::${roleRecord.roleDefinitionId}`;
     policyStoreName = 'role_policies';
+    expectActivation = { kind: 'role', roleDefinitionId: roleRecord.roleDefinitionId };
     refreshStalePolicy = () => refreshSingleRolePolicy(account, roleRecord.roleDefinitionId, roleRecord.directoryScopeId);
   } else {
     const groupRecord = await db.get('groups', entityId);
@@ -127,6 +133,7 @@ async function handleActivate(kind: 'role' | 'group', params: ActivateParams): P
     };
     policyKey = `${account.tenantId}::${groupRecord.groupId}::${groupRecord.accessId}`;
     policyStoreName = 'group_policies';
+    expectActivation = { kind: 'group', groupId: groupRecord.groupId };
     refreshStalePolicy = () => refreshSingleGroupPolicy(account, groupRecord.groupId, groupRecord.accessId, groupRecord.displayName);
   }
   if (ticketNumber) body.ticketInfo = { ticketNumber, ticketSystem: ticketSystem ?? '' };
@@ -191,6 +198,11 @@ async function handleActivate(kind: 'role' | 'group', params: ActivateParams): P
   }
 
   log('info', 'activate', `ACTIVATE_${kind.toUpperCase()} succeeded for ${maskUpn(account.userPrincipalName)}, ${kind} ${displayName}: ${finalStatus}`);
+
+  // The request was accepted, so the justification is worth keeping. Awaiting
+  // approval counts -- the text was still submitted and will be reused.
+  if (savePrefill) await saveJustificationPrefill(accountId, justification);
+
   if (finalStatus === 'PendingApproval') {
     await notify('Activation request submitted', `"${displayName}" is awaiting approval`);
   } else {
@@ -211,6 +223,14 @@ async function handleActivate(kind: 'role' | 'group', params: ActivateParams): P
   }
   await updateBadge();
   void checkExpiries().catch(() => {});
+
+  // Graph may not list the new assignment yet, so keep checking in the
+  // background. Skipped for approval-pending requests, where no activation is
+  // expected until an approver acts. Not awaited: the ack returns now and the
+  // popup updates from DB_CHANGED whenever the data lands.
+  if (finalStatus !== 'PendingApproval') {
+    void confirmActivationVisible(freshAccount, expectActivation).catch(() => {});
+  }
   return { ok: true };
 }
 
@@ -424,10 +444,13 @@ async function handleSignInNew(payload: CommandPayload<'SIGN_IN_NEW'>): Promise<
     const signedInAccount = await signedInDb.get('accounts', accountId);
     if (signedInAccount?.accessToken) {
       log('info', 'sync', `Triggering initial PIM sync for ${maskUpn(signedInAccount.userPrincipalName)}`);
-      sendNotification({ type: 'SYNC_STATUS', running: true });
+      // Recorded, not just broadcast: the popup was closed by the interactive
+      // sign-in window and re-opens partway through this sync, so it has to be
+      // able to read the state rather than catch a message it already missed.
+      await setSyncRunning(true);
       syncEligibleAssignments(signedInAccount)
         .catch(err => log('warn', 'sync', `Initial PIM sync failed: ${err instanceof Error ? err.message : String(err)}`))
-        .finally(() => { sendNotification({ type: 'SYNC_STATUS', running: false }); });
+        .finally(() => { void setSyncRunning(false); });
     } else {
       log('warn', 'account', `Cannot trigger initial PIM sync for ${maskUpn(username)}: no access token after sign-in`);
     }
@@ -473,7 +496,8 @@ async function handleSignOut(payload: CommandPayload<'SIGN_OUT'>): Promise<Comma
     ['accounts', 'roles', 'groups', 'activations', 'approvals',
      'pending_requests', 'activating', 'states',
      'role_definitions', 'role_policies', 'group_policies',
-     'azure_scopes', 'azure_roles', 'azure_activations', 'azure_policies'],
+     'azure_scopes', 'azure_roles', 'azure_activations', 'azure_policies',
+     'justification_prefills'],
     'readwrite'
   );
 
@@ -486,7 +510,8 @@ async function handleSignOut(payload: CommandPayload<'SIGN_OUT'>): Promise<Comma
 
   const [roleKeys, groupKeys, activationKeys, approvalKeys,
          pendingRequestKeys, activatingKeys, allStates,
-         azureScopeKeys, azureRoleKeys, azureActivationKeys, azurePolicyKeys] = await Promise.all([
+         azureScopeKeys, azureRoleKeys, azureActivationKeys, azurePolicyKeys,
+         prefillKeys] = await Promise.all([
     tx.objectStore('roles').index('by-account').getAllKeys(accountId),
     tx.objectStore('groups').index('by-account').getAllKeys(accountId),
     tx.objectStore('activations').index('by-account').getAllKeys(accountId),
@@ -498,6 +523,8 @@ async function handleSignOut(payload: CommandPayload<'SIGN_OUT'>): Promise<Comma
     tx.objectStore('azure_roles').index('by-account').getAllKeys(accountId),
     tx.objectStore('azure_activations').index('by-account').getAllKeys(accountId),
     tx.objectStore('azure_policies').index('by-account').getAllKeys(accountId),
+    // Saved justifications are user-authored free text; they leave with the account.
+    tx.objectStore('justification_prefills').index('by-account').getAllKeys(accountId),
   ]);
   const stateKeys = allStates.filter(s => s.accountId === accountId).map(s => s.id);
 
@@ -518,6 +545,7 @@ async function handleSignOut(payload: CommandPayload<'SIGN_OUT'>): Promise<Comma
     ...pendingRequestKeys.map(k => tx.objectStore('pending_requests').delete(k)),
     ...activatingKeys.map(k => tx.objectStore('activating').delete(k)),
     ...stateKeys.map(k => tx.objectStore('states').delete(k)),
+    ...prefillKeys.map(k => tx.objectStore('justification_prefills').delete(k)),
     ...azureScopeKeys.map(k => tx.objectStore('azure_scopes').delete(k)),
     ...azureRoleKeys.map(k => tx.objectStore('azure_roles').delete(k)),
     ...azureActivationKeys.map(k => tx.objectStore('azure_activations').delete(k)),
@@ -668,6 +696,7 @@ const commandHandlers: {
   APPROVE_REQUEST: (payload) => handleApprovalCommand('Approve', payload),
   DENY_REQUEST: (payload) => handleApprovalCommand('Deny', payload),
   CANCEL_REQUEST: handleCancelRequest,
+  DELETE_JUSTIFICATION_PREFILL: ({ accountId, prefillId }) => deleteJustificationPrefill(accountId, prefillId),
   CLEAR_LOGS: async () => {
     await clearLogs();
     return { ok: true };
@@ -684,16 +713,43 @@ const commandHandlers: {
  * Handles all typed commands arriving from the popup via `browser.runtime.onMessage`.
  * Registered synchronously in index.ts to satisfy the MV3 requirement.
  *
+ * Messages from anywhere other than this extension are dropped. Nothing can
+ * reach this listener today -- the manifests declare no `content_scripts` and no
+ * `externally_connectable` -- but the dispatch table includes SIGN_OUT and the
+ * activation commands, so the check is in place before either is ever added.
+ *
  * Returns a `CommandAck` for known commands, or `undefined` for messages that
  * are not commands (no response expected).
  */
-export async function handleMessage(message: unknown): Promise<unknown> {
+export async function handleMessage(
+  message: unknown,
+  sender: browser.Runtime.MessageSender,
+): Promise<unknown> {
   const msgType = typeof message === 'object' && message !== null && 'type' in message
     ? String((message as { type: unknown }).type)
     : 'unknown';
+
+  if (sender.id !== browser.runtime.id) {
+    log('warn', 'message', `Dropped ${msgType} from unexpected sender`);
+    return undefined;
+  }
+
   log('info', 'message', `${msgType} received`);
 
   const handler = (commandHandlers as Record<string, (payload: unknown) => Promise<CommandAck>>)[msgType];
   if (!handler) return undefined;
-  return handler((message as { payload?: unknown }).payload ?? {});
+
+  // Handlers return { ok: false } for failures they anticipate, but an
+  // unexpected throw (a failed IndexedDB open, a quota error) would otherwise
+  // reject across the message boundary. webextension-polyfill reports that as
+  // "a listener's promise rejected without an Error", which tells the user
+  // nothing and leaves the popup with no message to display. Convert it into
+  // the CommandAck the caller already knows how to handle.
+  try {
+    return await handler((message as { payload?: unknown }).payload ?? {});
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    log('error', 'message', `${msgType} threw: ${error}`);
+    return { ok: false, error } satisfies CommandAck;
+  }
 }

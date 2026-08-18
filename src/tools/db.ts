@@ -395,7 +395,55 @@ export interface AzurePolicyRecord {
   lastSyncedAt: number;
 }
 
+/**
+ * A justification the user chose to save from the activation dialog, offered
+ * back as a quick-pick the next time they activate anything on this account.
+ *
+ * Scoped to the account rather than to a specific role or group: a user's
+ * justifications ("Break-glass incident response", "Monthly access review")
+ * are reusable across targets, and per-target scoping would leave the picker
+ * empty for every role they had not activated before.
+ *
+ * `text` is user-authored free text and is treated like justification text
+ * everywhere else in the codebase: never logged, never included in the Debug
+ * panel snapshot, and deleted with the account on sign-out.
+ */
+export interface JustificationPrefillRecord {
+  id: string;
+  /** `AccountRecord.id` this prefill belongs to. */
+  accountId: string;
+  /** The saved justification, trimmed and capped at `MAX_JUSTIFICATION_LENGTH`. */
+  text: string;
+  /** Epoch milliseconds when the prefill was first saved. */
+  createdAt: number;
+  /** Epoch milliseconds when it was last saved or reused; drives ordering and eviction. */
+  lastUsedAt: number;
+}
+
+/** `states` key holding the sync-in-flight marker read by the popup's syncing indicator. */
+export const SYNC_STATE_ID = 'sync';
+
+/**
+ * A sync-in-flight marker older than this is treated as abandoned. The service
+ * worker clears the record on every wake, so this only covers the window
+ * between a worker dying mid-sync and the next wake.
+ */
+export const SYNC_STALE_TTL_MS = 5 * 60 * 1000;
+
+/** Most prefills retained per account. The least recently used is evicted beyond this. */
+export const MAX_JUSTIFICATION_PREFILLS = 10;
+
+/** Longest justification stored as a prefill. Longer text still activates; it is just not saved whole. */
+export const MAX_JUSTIFICATION_LENGTH = 500;
+
 interface PrivlyDB extends DBSchema {
+  justification_prefills: {
+    key: string;
+    value: JustificationPrefillRecord;
+    indexes: {
+      'by-account': string;
+    };
+  };
   accounts: {
     key: string;
     value: AccountRecord;
@@ -554,6 +602,7 @@ let dbPromise: Promise<IDBPDatabase<PrivlyDB>> | null = null;
  * - v13: `extension_settings` gains a `theme` field, backfilled with 'system'
  * - v14: `AccountRecord` gains `tenantDisplayName` from Graph `/organization` `displayName`
  * - v15: `logs` store added; `extension_settings` gains `loggingEnabled` and `logMaxEntries`
+ * - v16: `justification_prefills` store added (saved activation justifications, CS-3)
  * @returns A typed `IDBPDatabase` handle for the Privly database.
  */
 export function getDB(): Promise<IDBPDatabase<PrivlyDB>> {
@@ -566,7 +615,7 @@ export function getDB(): Promise<IDBPDatabase<PrivlyDB>> {
 }
 
 function openDBConnection(): Promise<IDBPDatabase<PrivlyDB>> {
-  return openDB<PrivlyDB>('privly', 15, {
+  return openDB<PrivlyDB>('privly', 16, {
     blocking() {
       // Another context is upgrading to a newer schema version. Close this
       // connection so the upgrade can proceed; the next getDB() reopens.
@@ -577,7 +626,7 @@ function openDBConnection(): Promise<IDBPDatabase<PrivlyDB>> {
       dbPromise = null;
     },
     async upgrade(db, oldVersion, newVersion, transaction) {
-      lastMigration = { from: oldVersion, to: newVersion ?? 15 };
+      lastMigration = { from: oldVersion, to: newVersion ?? 16 };
       if (oldVersion < 1) {
         const accounts = db.createObjectStore('accounts', { keyPath: 'id' });
         accounts.createIndex('by-tenant-account', ['tenantId', 'accountId'], { unique: true });
@@ -711,6 +760,14 @@ function openDBConnection(): Promise<IDBPDatabase<PrivlyDB>> {
           await settingsStore.put({ ...existing, loggingEnabled: existing.loggingEnabled ?? true, logMaxEntries: existing.logMaxEntries ?? 500 });
         }
       }
+
+      if (oldVersion < 16) {
+        // Saved activation justifications, offered as quick-picks in the
+        // activation dialog. Nothing to backfill -- existing users start empty
+        // and populate the list the first time they tick "Save for next time".
+        const prefills = db.createObjectStore('justification_prefills', { keyPath: 'id' });
+        prefills.createIndex('by-account', 'accountId');
+      }
     },
   });
 }
@@ -718,7 +775,8 @@ function openDBConnection(): Promise<IDBPDatabase<PrivlyDB>> {
 /** Store names that carry per-account records via a `by-account` index. */
 type AccountScopedStore =
   | 'roles' | 'groups' | 'activations' | 'approvals' | 'pending_requests'
-  | 'activating' | 'azure_scopes' | 'azure_roles' | 'azure_activations' | 'azure_policies';
+  | 'activating' | 'azure_scopes' | 'azure_roles' | 'azure_activations' | 'azure_policies'
+  | 'justification_prefills';
 
 /**
  * Replaces an account's records in a store within a single short transaction:

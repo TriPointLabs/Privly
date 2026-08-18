@@ -105,6 +105,18 @@ export async function fetchWithRetry(url: string, init: RequestInit): Promise<Re
   }
 }
 
+/**
+ * Returns true when `candidate` parses as a URL on exactly `origin`.
+ * An unparseable link is treated as off-origin so it is never followed.
+ */
+function isSameOrigin(candidate: string, origin: string): boolean {
+  try {
+    return new URL(candidate).origin === origin;
+  } catch {
+    return false;
+  }
+}
+
 /** Result of a paginated list fetch: all pages' items, or the first failing response. */
 export type PagedResult<T> =
   | { ok: true; items: T[] }
@@ -116,12 +128,20 @@ export type PagedResult<T> =
  * A page failure fails the whole call so callers never act on partial data.
  * `maxPages` bounds a pathological response chain; hitting it is logged loudly
  * rather than silently truncating.
+ *
+ * The continuation link is chosen by the server but is followed with the
+ * caller's `Authorization` header attached, so a link pointing off-origin would
+ * hand a privileged bearer token to another host. Unlike an HTTP redirect --
+ * where the Fetch spec strips `Authorization` cross-origin -- this request is
+ * built here, so nothing strips it for us. Pagination therefore stops at the
+ * first link whose origin differs from the first page's.
  * @param url - First page URL (with query parameters).
  * @param init - Standard `RequestInit` forwarded to every page request.
  * @param maxPages - Upper bound on pages to follow. Defaults to 20.
  */
 export async function fetchAllPages<T>(url: string, init: RequestInit, maxPages = 20): Promise<PagedResult<T>> {
   const items: T[] = [];
+  const origin = new URL(url).origin;
   let next: string | undefined = url;
   for (let page = 0; next && page < maxPages; page++) {
     const res = await fetchWithRetry(next, init);
@@ -131,7 +151,13 @@ export async function fetchAllPages<T>(url: string, init: RequestInit, maxPages 
     }
     const json = await res.json() as { value?: T[]; '@odata.nextLink'?: string; nextLink?: string };
     items.push(...(json.value ?? []));
-    next = json['@odata.nextLink'] ?? json.nextLink;
+
+    const link = json['@odata.nextLink'] ?? json.nextLink;
+    if (link && !isSameOrigin(link, origin)) {
+      log('error', 'general', `Refusing cross-origin continuation link from ${origin}; results are incomplete`);
+      return { ok: true, items };
+    }
+    next = link;
   }
   if (next) {
     log('warn', 'general', `fetchAllPages hit the ${maxPages}-page cap for ${url.split('?')[0]} -- results are incomplete`);

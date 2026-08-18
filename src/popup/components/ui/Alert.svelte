@@ -8,10 +8,12 @@
     onDismiss: () => void;
   } = $props();
 
+  // Opaque backgrounds, not the translucent -muted tokens: this toast floats
+  // over scrolling content and anything behind it would otherwise read through.
   const colorMap = {
-    success: 'bg-status-green-muted border-status-green-border text-status-green',
-    error: 'bg-status-red-muted border-status-red-border text-status-red',
-    info: 'bg-brand-primary/20 border-brand-primary/40 text-brand-secondary',
+    success: 'bg-alert-success border-status-green-border text-status-green',
+    error: 'bg-alert-error border-status-red-border text-status-red',
+    info: 'bg-alert-info border-brand-primary/40 text-brand-secondary',
   };
 
   const dotColor = {
@@ -41,7 +43,7 @@
 
 <div
   bind:this={el}
-  class="flex items-start gap-3 px-4 py-3 rounded-lg border {colorMap[type]} focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-secondary"
+  class="flex items-start gap-3 px-4 py-3 rounded-lg border shadow-lg {colorMap[type]} focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-secondary"
   role="alert"
   tabindex="-1"
 >

@@ -8,7 +8,7 @@ import { getDB, getExtensionSettings, type ActivatingRecord } from '../tools/db.
 import { notify } from '../tools/notify.ts';
 import { getArmHost } from '../tools/oauth.ts';
 import type { CommandAck, CommandMessage } from '../types/messages.ts';
-import { executeActivationRequest } from './activation.ts';
+import { executeActivationRequest, confirmActivationVisible } from './activation.ts';
 import { syncAzureEligibleAssignments, syncAzureActiveAssignments, refreshSingleAzurePolicy } from './sync.ts';
 import {
   notifyDbChanged,
@@ -18,8 +18,10 @@ import {
   PENDING_ACTIVATION_STATUSES,
 } from './utils.ts';
 import { refreshAzurePortalTabs } from './tabs.ts';
+import { saveJustificationPrefill } from './prefills.ts';
 import { log, maskUpn } from './log.ts';
 import { checkExpiries } from './expiry.ts';
+import { updateBadge } from './badge.ts';
 
 type ActivateAzurePayload = Extract<CommandMessage, { type: 'ACTIVATE_AZURE_ROLE' }>['payload'];
 type DeactivateAzurePayload = Extract<CommandMessage, { type: 'DEACTIVATE_AZURE_ROLE' }>['payload'];
@@ -29,7 +31,7 @@ type DeactivateAzurePayload = Extract<CommandMessage, { type: 'DEACTIVATE_AZURE_
  * while polling for provisioning, then re-syncs the Azure stores.
  */
 export async function handleActivateAzureRole(payload: ActivateAzurePayload): Promise<CommandAck> {
-  const { accountId, azureRoleId, durationMinutes, justification, ticketNumber, ticketSystem } = payload;
+  const { accountId, azureRoleId, durationMinutes, justification, ticketNumber, ticketSystem, savePrefill } = payload;
 
   const db = await getDB();
   const [account, roleRecord] = await Promise.all([
@@ -128,6 +130,9 @@ export async function handleActivateAzureRole(payload: ActivateAzurePayload): Pr
   }
 
   log('info', 'activate', `ACTIVATE_AZURE_ROLE succeeded for ${maskUpn(account.userPrincipalName)}, "${displayName}": ${finalStatus}`);
+
+  // The request was accepted, so the justification is worth keeping.
+  if (savePrefill) await saveJustificationPrefill(accountId, justification);
   if (finalStatus === 'PendingApproval') {
     await notify('Activation request submitted', `"${displayName}" is awaiting approval`);
   } else {
@@ -144,7 +149,22 @@ export async function handleActivateAzureRole(payload: ActivateAzurePayload): Pr
     syncAzureEligibleAssignments(freshAccount),
     syncAzureActiveAssignments(freshAccount),
   ]);
+  // Azure activations feed the badge countdown alongside the Entra ones, so the
+  // badge has to be repainted here too, as the Entra paths already do.
+  await updateBadge();
   void checkExpiries().catch(() => {});
+
+  // ARM may not list the new assignment yet, so keep checking in the
+  // background. Scoped by scopeId as well as role definition, since the same
+  // role can be held at more than one scope. Skipped for approval-pending
+  // requests, where no activation is expected until an approver acts.
+  if (finalStatus !== 'PendingApproval') {
+    void confirmActivationVisible(freshAccount, {
+      kind: 'azure',
+      scopeId: roleRecord.scopeId,
+      roleDefinitionId: roleRecord.roleDefinitionId,
+    }).catch(() => {});
+  }
   return { ok: true };
 }
 
@@ -199,6 +219,9 @@ export async function handleDeactivateAzureRole(payload: DeactivateAzurePayload)
     syncAzureEligibleAssignments(freshAccount),
     syncAzureActiveAssignments(freshAccount),
   ]);
+  // Matches the Entra deactivation path: the countdown may have just lost the
+  // activation it was showing.
+  await updateBadge();
   void checkExpiries().catch(() => {});
   return { ok: true };
 }

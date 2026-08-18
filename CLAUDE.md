@@ -16,7 +16,7 @@ Privly is multi-user from the start. Multiple Entra accounts may be active simul
   - `auth.ts` -- token lifecycle: sign-in, silent refresh, ARM tokens, step-up (`runAuthCodeFlow` owns the PKCE flow)
   - `sync.ts` -- Graph/ARM data sync, policy engine, `runSyncCycle`
   - `expiry.ts` -- expiry notifications (`checkExpiries` + one-shot `expiry-check` alarm)
-  - `badge.ts` -- badge count and recurring alarms
+  - `badge.ts` -- badge countdown (time left on the soonest-expiring activation) and recurring alarms
   - `log.ts` -- redacted persistent logging (see Logging)
   - `utils.ts` -- fetch wrapper, pagination, polling, policy-rule parsing
   - `tabs.ts` -- portal tab reload after activation

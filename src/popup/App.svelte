@@ -201,7 +201,7 @@
       in:slideX={{ x: '100%', duration: 300, easing: quintOut }}
       out:slideX={{ x: '100%', duration: 260, easing: cubicIn }}
     >
-      <DebugPage onBack={handleDebugBack} />
+      <DebugPage onBack={handleDebugBack} {addAlert} />
     </div>
   {:else if view === 'settings'}
     <div
@@ -217,7 +217,7 @@
        positioning so it is always in the root div's stacking context. fixed would escape
        to the viewport but can be re-trapped if any ancestor gains a transform at runtime. -->
   <div
-    class="pointer-events-none absolute inset-x-0 top-12 z-[200] flex flex-col gap-2 px-3 pt-2"
+    class="pointer-events-none absolute inset-x-0 top-12 z-[200] flex flex-col gap-2 pl-3 pr-4 pt-2"
   >
     {#each alerts as alert (alert.id)}
       <div class="pointer-events-auto" transition:slide={{ duration: 150 }}>

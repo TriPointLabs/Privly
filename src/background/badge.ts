@@ -1,47 +1,123 @@
 /**
  * Extension action badge and alarm management.
  *
- * Owns the badge count display (active activations for the selected account)
- * and the two recurring alarms: `token-refresh` (5-minute interval) and
- * `pending-approval-check` (1-minute interval, created on demand).
+ * The badge shows how long is left on the soonest-expiring activation for the
+ * selected account -- "42m", "2h" -- so the user can tell at a glance whether
+ * they need to reactivate without opening the popup (CS-4). It is blank when
+ * nothing has a timer running: permanent assignments carry no expiry, so an
+ * account holding only those shows nothing.
+ *
+ * Also owns the recurring alarms: `token-refresh` (5-minute interval),
+ * `pending-approval-check` (1-minute, created on demand), and `badge-tick`
+ * (1-minute, live only while a timed activation exists).
  */
 import browser from 'webextension-polyfill';
 import { getDB, getExtensionSettings, type ExtensionSettingsRecord } from '../tools/db.js';
 import { log } from './log.ts';
 
+/** Ticks the badge countdown down; exists only while something is counting. */
+export const BADGE_ALARM = 'badge-tick';
+
+/** Default badge background. */
+const BADGE_COLOR = '#7c3aed';
+/** Badge background once the soonest expiry is inside the notification lead time. */
+const BADGE_COLOR_WARNING = '#b45309';
+
 /**
- * Updates the extension action badge to show the number of active activations
- * for the currently selected account.
+ * Renders milliseconds-remaining as a badge label.
  *
- * Clears the badge if the setting is disabled, no account is active, or there
- * are no activations. Accepts pre-fetched settings to avoid a redundant DB
- * read when called immediately after a settings update.
+ * The badge fits roughly four characters, so the unit steps up rather than
+ * combining units: minutes below an hour, whole hours below a day, then days.
+ * Minutes round up so a live activation never reads "0m" -- the last minute
+ * shows "1m" until it has actually expired.
+ * @param msRemaining - Milliseconds until the activation expires.
+ * @returns A short label, or '' when nothing is left to show.
+ */
+export function formatBadgeCountdown(msRemaining: number): string {
+  const minutes = Math.ceil(msRemaining / 60_000);
+  if (minutes <= 0) return '';
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return days < 10 ? `${days}d` : '9d+';
+}
+
+/**
+ * Returns the epoch-millisecond expiry of the soonest-expiring live activation
+ * for `accountId`, or null when the account has none.
+ *
+ * Covers Entra roles and groups plus Azure ARM roles: an Azure role is still a
+ * role the user needs to reactivate. Permanent assignments and records with no
+ * expiry are skipped, as are any that have already lapsed but not yet synced
+ * away.
+ * @param accountId - `AccountRecord.id` to inspect.
+ */
+async function soonestExpiryAt(accountId: string): Promise<number | null> {
+  const db = await getDB();
+  const [entra, azure] = await Promise.all([
+    db.getAllFromIndex('activations', 'by-account', accountId),
+    db.getAllFromIndex('azure_activations', 'by-account', accountId),
+  ]);
+
+  const now = Date.now();
+  const expiries = [
+    ...entra.filter(a => !a.isPermanent && a.expiresAt > now).map(a => a.expiresAt),
+    ...azure.filter(a => !a.isPermanent && a.endDateTime > now).map(a => a.endDateTime),
+  ];
+  return expiries.length > 0 ? Math.min(...expiries) : null;
+}
+
+/**
+ * Repaints the badge for the active account and reconciles the `badge-tick`
+ * alarm in the same pass, so the alarm can never outlive what it is ticking.
+ *
+ * Clears both when the badge is disabled, when no account is selected, or when
+ * nothing has a timer.
  * @param [knownSettings] - Pre-fetched settings; if omitted, settings are read from the DB.
  */
 export async function updateBadge(knownSettings?: ExtensionSettingsRecord): Promise<void> {
   const settings = knownSettings ?? await getExtensionSettings();
-  if (!settings.showBadge) {
+
+  let expiresAt: number | null = null;
+  if (settings.showBadge) {
+    const stored = await browser.storage.local.get('activeAccountId');
+    const activeAccountId = stored['activeAccountId'] as string | undefined;
+    if (activeAccountId) expiresAt = await soonestExpiryAt(activeAccountId);
+  }
+
+  if (expiresAt === null) {
     await browser.action.setBadgeText({ text: '' });
+    await reconcileBadgeAlarm(false);
     return;
   }
-  const stored = await browser.storage.local.get('activeAccountId');
-  const activeAccountId = stored['activeAccountId'] as string | undefined;
-  if (!activeAccountId) {
-    await browser.action.setBadgeText({ text: '' });
-    return;
+
+  const remaining = expiresAt - Date.now();
+  const warning = remaining <= settings.notifyMinutesBefore * 60_000;
+  await browser.action.setBadgeBackgroundColor({ color: warning ? BADGE_COLOR_WARNING : BADGE_COLOR });
+  await browser.action.setBadgeText({ text: formatBadgeCountdown(remaining) });
+  await reconcileBadgeAlarm(true);
+}
+
+/**
+ * Creates or clears the 1-minute `badge-tick` alarm.
+ *
+ * A periodic alarm rather than a one-shot scheduled at the next display change:
+ * the label changes every minute for most of an activation's life, so the
+ * bookkeeping to compute the next change would cost more than it saves. The
+ * alarm exists only while something is counting down, matching how
+ * `pending-approval-check` avoids waking the worker for nothing.
+ * @param needed - Whether a countdown is currently displayed.
+ */
+async function reconcileBadgeAlarm(needed: boolean): Promise<void> {
+  const existing = await browser.alarms.get(BADGE_ALARM);
+  if (needed && !existing) {
+    await browser.alarms.create(BADGE_ALARM, { periodInMinutes: 1 });
+    log('info', 'alarm', 'badge-tick alarm created');
+  } else if (!needed && existing) {
+    await browser.alarms.clear(BADGE_ALARM);
+    log('info', 'alarm', 'badge-tick alarm cleared');
   }
-  const db = await getDB();
-  const [activations, account] = await Promise.all([
-    db.getAllFromIndex('activations', 'by-account', activeAccountId),
-    db.get('accounts', activeAccountId),
-  ]);
-  const showPermanent = account?.showPermanentAssignments ?? false;
-  const now = Date.now();
-  const count = activations.filter(a =>
-    (a.expiresAt === 0 || a.expiresAt > now) &&
-    (showPermanent || !a.isPermanent)
-  ).length;
-  await browser.action.setBadgeText({ text: count > 0 ? String(count) : '' });
 }
 
 /**

@@ -34,6 +34,7 @@ import {
   syncMyPendingRequests,
   refreshSingleRolePolicy,
   refreshSingleGroupPolicy,
+  setSyncRunning,
 } from './sync.ts';
 import { updateBadge, reconcilePendingApprovalAlarm } from './badge.ts';
 import { executeActivationRequest } from './activation.ts';
@@ -432,10 +433,13 @@ async function handleSignInNew(payload: CommandPayload<'SIGN_IN_NEW'>): Promise<
     const signedInAccount = await signedInDb.get('accounts', accountId);
     if (signedInAccount?.accessToken) {
       log('info', 'sync', `Triggering initial PIM sync for ${maskUpn(signedInAccount.userPrincipalName)}`);
-      sendNotification({ type: 'SYNC_STATUS', running: true });
+      // Recorded, not just broadcast: the popup was closed by the interactive
+      // sign-in window and re-opens partway through this sync, so it has to be
+      // able to read the state rather than catch a message it already missed.
+      await setSyncRunning(true);
       syncEligibleAssignments(signedInAccount)
         .catch(err => log('warn', 'sync', `Initial PIM sync failed: ${err instanceof Error ? err.message : String(err)}`))
-        .finally(() => { sendNotification({ type: 'SYNC_STATUS', running: false }); });
+        .finally(() => { void setSyncRunning(false); });
     } else {
       log('warn', 'account', `Cannot trigger initial PIM sync for ${maskUpn(username)}: no access token after sign-in`);
     }

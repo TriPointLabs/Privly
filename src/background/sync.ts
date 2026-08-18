@@ -27,6 +27,7 @@ import {
   type AzureRoleRecord,
   type AzureActivationRecord,
   type AzurePolicyRecord,
+  SYNC_STATE_ID,
 } from '../tools/db.ts';
 import { getArmHost } from '../tools/oauth.ts';
 import { notify } from '../tools/notify.ts';
@@ -1253,16 +1254,59 @@ export async function cleanStaleActivatingRecords(): Promise<void> {
 }
 
 /**
+ * Records that a sync is starting or finishing.
+ *
+ * Writes the `states` store as well as broadcasting `SYNC_STATUS`, because the
+ * broadcast alone only reaches a popup that is already mounted and listening.
+ * The popup closes as soon as focus moves to the interactive sign-in window, so
+ * after the first sign-in it re-opens partway through the initial sync and
+ * would otherwise show no activity at all. Persisting the marker lets a popup
+ * that opens mid-sync read the current state, exactly as `sign-in:new` already
+ * works. The broadcast is kept so an open popup still updates instantly rather
+ * than waiting on a DB round trip.
+ * @param running - Whether a sync is now in flight.
+ */
+export async function setSyncRunning(running: boolean): Promise<void> {
+  try {
+    const db = await getDB();
+    if (running) {
+      await db.put('states', { id: SYNC_STATE_ID, status: 'pending', startedAt: Date.now() });
+    } else {
+      await db.delete('states', SYNC_STATE_ID);
+    }
+    notifyDbChanged('states');
+  } catch (e) {
+    // A progress indicator must never break the sync it is reporting on.
+    log('warn', 'sync', `Could not record sync state: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  sendNotification({ type: 'SYNC_STATUS', running });
+}
+
+/**
+ * Clears an abandoned sync marker left behind by a service worker that died
+ * mid-sync. Called on every worker wake: if this module is being evaluated, no
+ * sync from a previous lifetime can still be running.
+ */
+export async function clearStaleSyncState(): Promise<void> {
+  const db = await getDB();
+  const existing = await db.get('states', SYNC_STATE_ID);
+  if (!existing) return;
+  await db.delete('states', SYNC_STATE_ID);
+  notifyDbChanged('states');
+  log('info', 'sync', 'Cleared stale sync marker from a previous worker lifetime');
+}
+
+/**
  * Refreshes tokens and re-syncs PIM data for every signed-in account. Runs on
  * the 5-minute token-refresh alarm, on browser startup, and on manual refresh
- * (TRIGGER_SYNC). Fires SYNC_STATUS so the popup can show a syncing indicator.
+ * (TRIGGER_SYNC). Records sync state so the popup can show a syncing indicator.
  */
 export async function runSyncCycle(force = false): Promise<void> {
   const db = await getDB();
   const accounts = await db.getAll('accounts');
   log('info', 'sync', `Sync cycle started: ${accounts.length} account(s)`);
 
-  sendNotification({ type: 'SYNC_STATUS', running: true });
+  await setSyncRunning(true);
 
   await Promise.all(accounts.map(async (account) => {
     log('info', 'sync', `Processing account: ${maskUpn(account.userPrincipalName)} (${account.cloud})`);
@@ -1296,7 +1340,7 @@ export async function runSyncCycle(force = false): Promise<void> {
   }));
 
   log('info', 'sync', 'Sync cycle complete');
-  sendNotification({ type: 'SYNC_STATUS', running: false });
+  await setSyncRunning(false);
   await updateBadge();
   await checkExpiries();
 }

@@ -16,7 +16,7 @@ import browser from 'webextension-polyfill';
 import { getDB, consumeMigrationInfo, DEFAULT_EXTENSION_SETTINGS } from '../tools/db.ts';
 import { notify } from '../tools/notify.ts';
 import { updateBadge, ensureAlarms, reconcilePendingApprovalAlarm, BADGE_ALARM } from './badge.ts';
-import { runSyncCycle, syncMyPendingRequests, syncActiveAssignments, syncActiveGroupAssignments, cleanStaleActivatingRecords } from './sync.ts';
+import { runSyncCycle, syncMyPendingRequests, syncActiveAssignments, syncActiveGroupAssignments, cleanStaleActivatingRecords, clearStaleSyncState } from './sync.ts';
 import { handleMessage } from './handlers.ts';
 import { log } from './log.ts';
 import { checkExpiries, EXPIRY_ALARM } from './expiry.ts';
@@ -120,6 +120,7 @@ browser.alarms.onAlarm.addListener(async (alarm) => {
 // Startup tasks run after all synchronous addListener calls (MV3 requirement).
 // The SW module re-evaluates on every wake-up from sleep, so these run on each resurrection.
 cleanStaleActivatingRecords().catch(() => {});
+clearStaleSyncState().catch(() => {});
 reconcilePendingApprovalAlarm().catch(() => {});
 checkExpiries().catch(() => {});
 // The countdown goes stale while the worker sleeps; repaint on every wake.

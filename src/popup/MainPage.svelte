@@ -25,7 +25,7 @@
   import { sendCommand, MessageType, type StoreName, type CommandAck } from '../types/messages.js';
   import { Eye, EyeOff } from '@lucide/svelte';
   import { type AccountRecord, type ActivatingRecord, type JustificationPrefillRecord } from '../tools/db.js';
-  import { loadAccounts, loadEligibleRoles, loadActiveAssignments, loadEligibleGroups, loadApprovals, loadPendingRequests, loadActivating, loadAzureSubscriptionGroups, loadJustificationPrefills, type AzureSubscriptionGroup } from './data.js';
+  import { loadAccounts, loadEligibleRoles, loadActiveAssignments, loadEligibleGroups, loadApprovals, loadPendingRequests, loadActivating, loadAzureSubscriptionGroups, loadJustificationPrefills, loadSyncRunning, type AzureSubscriptionGroup } from './data.js';
   import { toMinutes } from './utils/duration.js';
   import privlyTextColor from '../assets/privly-text-color.svg';
 
@@ -36,6 +36,17 @@
   } = $props();
 
   let syncing = $state(false);
+
+  /**
+   * Reads the persisted sync marker. The `SYNC_STATUS` broadcast only reaches a
+   * popup that is already mounted, and after the first sign-in this component
+   * mounts partway through the initial sync -- the popup having been closed by
+   * the interactive sign-in window -- so the broadcast that started it is long
+   * gone by then.
+   */
+  async function refreshSyncState() {
+    syncing = await loadSyncRunning();
+  }
 
   // A sync cycle fires 10+ DB_CHANGED notifications in bursts. Collect store
   // names for a short window and run each affected refresher once per burst
@@ -50,6 +61,10 @@
       const stores = pendingStores;
       pendingStores = new Set();
       flushTimer = null;
+      // Checked before the accounts early-return below: sign-in reports
+      // 'accounts' and 'states' in the same burst, and the early return would
+      // otherwise drop the syncing indicator on exactly the flow that needs it.
+      if (stores.has('states')) refreshSyncState();
       if (stores.has('accounts')) {
         // refreshAccounts re-runs every per-account query itself.
         refreshAccounts();
@@ -177,6 +192,7 @@
   }
 
   refreshAccounts();
+  refreshSyncState();
 
   let eligibleRoles = $state<EligibleRole[]>([]);
   const eligibleEntraRoles = $derived(eligibleRoles.filter(r => r.roleType === 'EntraRole'));

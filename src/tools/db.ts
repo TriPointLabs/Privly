@@ -420,6 +420,16 @@ export interface JustificationPrefillRecord {
   lastUsedAt: number;
 }
 
+/** `states` key holding the sync-in-flight marker read by the popup's syncing indicator. */
+export const SYNC_STATE_ID = 'sync';
+
+/**
+ * A sync-in-flight marker older than this is treated as abandoned. The service
+ * worker clears the record on every wake, so this only covers the window
+ * between a worker dying mid-sync and the next wake.
+ */
+export const SYNC_STALE_TTL_MS = 5 * 60 * 1000;
+
 /** Most prefills retained per account. The least recently used is evicted beyond this. */
 export const MAX_JUSTIFICATION_PREFILLS = 10;
 

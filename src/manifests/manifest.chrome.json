@@ -4,6 +4,9 @@
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyVTDTBUsoPDbhwgIRYmkule3vcHrtHoJEuAYl3cT3vnJoj66jYn1dltLoun4fmq9okabc//6hU4JTglOYv8CpdnTo25FfKbu21FQIUWox4KJvAl4dUZ4WdcigK9fvTpStILesBwspyo6v9P9/Roz6iI8SsvCE29IDvDJVwFA0PVy8WHrZfPdGwFd7maHSwXkIu+G+pEYtoenmAC5gwcPG2BTNFX6rkVD5jgn/USs6k5fUn2OOfmJBTUGFnaVGlQTpP5IgkIqfjtdZd0qmjxwS5SwJA8kneaSe2hxgAFI38JbN91jZc1UHua9nlMXebItPtqnJaNH7CdKVpmnHOqliQIDAQAB",
   "description": "Azure PIM and Entra role management in your browser",
   "minimum_chrome_version": "126",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
   "background": {
     "service_worker": "background/index.js",
     "type": "module"
@@ -29,7 +32,8 @@
     "alarms",
     "notifications",
     "tabs",
-    "browsingData"
+    "browsingData",
+    "cookies"
   ],
   "host_permissions": [
     "https://graph.microsoft.com/*",

@@ -5,11 +5,20 @@
  * role, group, and Azure ARM activations. Handlers build the request (URL,
  * body, success predicate) and this module drives it to completion.
  */
-import type { AccountRecord } from '../tools/db.ts';
+import { getDB, type AccountRecord } from '../tools/db.ts';
 import { notify } from '../tools/notify.ts';
 import { getArmScopes } from '../tools/oauth.ts';
 import { acquireTokenInteractive, acquireSteppedUpToken, tokenSatisfiesPolicy } from './auth.ts';
 import { parseGraphError } from './utils.ts';
+import {
+  syncRoleAssignments,
+  syncActiveAssignments,
+  syncGroupAssignments,
+  syncAzureEligibleAssignments,
+  syncAzureActiveAssignments,
+} from './sync.ts';
+import { updateBadge } from './badge.ts';
+import { checkExpiries } from './expiry.ts';
 import { log } from './log.ts';
 
 /**
@@ -173,4 +182,94 @@ export async function executeActivationRequest(opts: {
   const errorMsg = parseGraphError(failBody, defaultError);
   await notify(notifyLabel, errorMsg);
   return { ok: false, error: errorMsg };
+}
+
+
+// ---------------------------------------------------------------------------
+// Post-activation confirmation
+// ---------------------------------------------------------------------------
+
+/**
+ * What the post-activation confirmation waits to see land in the local stores.
+ * Entra roles and groups arrive in `activations`; Azure ARM roles arrive in
+ * `azure_activations`, identified by scope as well as role definition because
+ * the same role can be held at more than one scope.
+ */
+export type ExpectedActivation =
+  | { kind: 'role'; roleDefinitionId: string }
+  | { kind: 'group'; groupId: string }
+  | { kind: 'azure'; scopeId: string; roleDefinitionId: string };
+
+/** Resyncs attempted after the immediate one before giving up on seeing the activation. */
+const ACTIVATION_CONFIRM_ATTEMPTS = 5;
+const ACTIVATION_CONFIRM_INTERVAL_MS = 2_000;
+
+/** True once the activation the caller is waiting for is present locally. */
+async function activationIsVisible(accountId: string, expect: ExpectedActivation): Promise<boolean> {
+  const db = await getDB();
+  if (expect.kind === 'azure') {
+    const scoped = await db.getAllFromIndex('azure_activations', 'by-scope', [accountId, expect.scopeId]);
+    return scoped.some(a => a.roleDefinitionId === expect.roleDefinitionId);
+  }
+  const activations = await db.getAllFromIndex('activations', 'by-account', accountId);
+  return expect.kind === 'role'
+    ? activations.some(a => a.kind === 'role' && a.roleDefinitionId === expect.roleDefinitionId)
+    : activations.some(a => a.kind === 'group' && a.groupId === expect.groupId);
+}
+
+/** Re-runs whichever syncs own the store the activation will appear in. */
+async function resyncFor(account: AccountRecord, expect: ExpectedActivation): Promise<void> {
+  if (expect.kind === 'role') {
+    await Promise.all([syncRoleAssignments(account), syncActiveAssignments(account)]);
+  } else if (expect.kind === 'group') {
+    await syncGroupAssignments(account);
+  } else {
+    await Promise.all([syncAzureEligibleAssignments(account), syncAzureActiveAssignments(account)]);
+  }
+}
+
+/**
+ * Waits for a just-activated role or group to actually show up locally,
+ * resyncing between checks.
+ *
+ * Graph and ARM both read eventually-consistently with their own write side. A
+ * schedule request can report a terminal status while the corresponding list
+ * endpoint -- which the sync layer filters on a Provisioned status -- has not
+ * caught up. Activations needing neither approval nor step-up are the worst
+ * case: the request returns terminal, so `pollUntilProvisioned` is skipped
+ * entirely and the resync reads back within milliseconds of the write. It then
+ * writes the pre-activation state, and the popup keeps showing the role as
+ * eligible until the user refreshes by hand.
+ *
+ * This also covers a resync whose fetch simply failed: the sync functions
+ * return early without notifying on a non-OK response, so a throttled request
+ * would otherwise leave the popup stale with nothing retrying it.
+ *
+ * Callers do not await this, so the command acks immediately and rows appear
+ * when the data lands. It checks before sleeping, so the common case where the
+ * immediate resync already worked costs one indexed read.
+ * @param account - Account that performed the activation.
+ * @param expect - The role or group to wait for.
+ */
+export async function confirmActivationVisible(
+  account: AccountRecord,
+  expect: ExpectedActivation,
+): Promise<void> {
+  for (let attempt = 0; attempt <= ACTIVATION_CONFIRM_ATTEMPTS; attempt++) {
+    if (await activationIsVisible(account.id, expect)) {
+      if (attempt > 0) {
+        log('info', 'activate', `Activation became visible after ${attempt} extra resync(s)`);
+        // The badge countdown and expiry alarm are both derived from the
+        // activation that only just arrived.
+        await updateBadge();
+        void checkExpiries().catch(() => {});
+      }
+      return;
+    }
+    if (attempt === ACTIVATION_CONFIRM_ATTEMPTS) break;
+
+    await new Promise(resolve => setTimeout(resolve, ACTIVATION_CONFIRM_INTERVAL_MS));
+    await resyncFor(account, expect);
+  }
+  log('warn', 'activate', 'Activation has not appeared yet; the next sync cycle will pick it up');
 }

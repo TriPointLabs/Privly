@@ -55,6 +55,73 @@ import { checkExpiries } from './expiry.ts';
 type CommandPayload<K extends CommandMessage['type']> = Extract<CommandMessage, { type: K }>['payload'];
 
 // ---------------------------------------------------------------------------
+// Post-activation confirmation
+// ---------------------------------------------------------------------------
+
+/** What the post-activation confirmation waits to see land in `activations`. */
+type ExpectedActivation =
+  | { kind: 'role'; roleDefinitionId: string }
+  | { kind: 'group'; groupId: string };
+
+/** Resyncs attempted after the immediate one before giving up on seeing the activation. */
+const ACTIVATION_CONFIRM_ATTEMPTS = 5;
+const ACTIVATION_CONFIRM_INTERVAL_MS = 2_000;
+
+/**
+ * Waits for a just-activated role or group to actually show up in the
+ * `activations` store, resyncing between checks.
+ *
+ * Graph's read side is eventually consistent with its write side. A
+ * roleAssignmentScheduleRequest can report a terminal status while
+ * roleAssignmentSchedules -- which `syncActiveAssignments` filters on
+ * `status eq 'Provisioned'` -- has not caught up yet. Activations needing
+ * neither approval nor step-up make this worst: the POST returns a terminal
+ * status, so `pollUntilProvisioned` is skipped entirely and the resync reads
+ * back within milliseconds of the write. It then writes the pre-activation
+ * state, and the popup keeps showing the role as eligible until the user
+ * refreshes by hand.
+ *
+ * This also covers a resync whose fetch simply failed: `syncActiveAssignments`
+ * returns early without notifying on a non-OK response, so a throttled request
+ * would otherwise leave the popup stale with nothing retrying it.
+ *
+ * Runs after the command has acked, so the dialog closes immediately and rows
+ * appear when the data lands. Checks before sleeping, so the common case where
+ * the immediate resync already worked costs one indexed read.
+ * @param account - Account that performed the activation.
+ * @param expect - The role or group to wait for.
+ */
+async function confirmActivationVisible(account: AccountRecord, expect: ExpectedActivation): Promise<void> {
+  for (let attempt = 0; attempt <= ACTIVATION_CONFIRM_ATTEMPTS; attempt++) {
+    const db = await getDB();
+    const activations = await db.getAllFromIndex('activations', 'by-account', account.id);
+    const visible = expect.kind === 'role'
+      ? activations.some(a => a.kind === 'role' && a.roleDefinitionId === expect.roleDefinitionId)
+      : activations.some(a => a.kind === 'group' && a.groupId === expect.groupId);
+
+    if (visible) {
+      if (attempt > 0) {
+        log('info', 'activate', `Activation became visible after ${attempt} extra resync(s)`);
+        // The badge countdown and expiry alarm are both derived from the
+        // activation that only just arrived.
+        await updateBadge();
+        void checkExpiries().catch(() => {});
+      }
+      return;
+    }
+    if (attempt === ACTIVATION_CONFIRM_ATTEMPTS) break;
+
+    await new Promise(resolve => setTimeout(resolve, ACTIVATION_CONFIRM_INTERVAL_MS));
+    if (expect.kind === 'role') {
+      await Promise.all([syncRoleAssignments(account), syncActiveAssignments(account)]);
+    } else {
+      await syncGroupAssignments(account);
+    }
+  }
+  log('warn', 'activate', 'Activation has not appeared in Graph yet; the next sync cycle will pick it up');
+}
+
+// ---------------------------------------------------------------------------
 // Shared activation helper
 // ---------------------------------------------------------------------------
 
@@ -92,6 +159,7 @@ async function handleActivate(kind: 'role' | 'group', params: ActivateParams): P
   let policyKey: string;
   let policyStoreName: 'role_policies' | 'group_policies';
   let refreshStalePolicy: () => Promise<void>;
+  let expectActivation: ExpectedActivation;
 
   if (kind === 'role') {
     const roleRecord = await db.get('roles', entityId);
@@ -112,6 +180,7 @@ async function handleActivate(kind: 'role' | 'group', params: ActivateParams): P
     };
     policyKey = `${account.tenantId}::${roleRecord.roleDefinitionId}`;
     policyStoreName = 'role_policies';
+    expectActivation = { kind: 'role', roleDefinitionId: roleRecord.roleDefinitionId };
     refreshStalePolicy = () => refreshSingleRolePolicy(account, roleRecord.roleDefinitionId, roleRecord.directoryScopeId);
   } else {
     const groupRecord = await db.get('groups', entityId);
@@ -131,6 +200,7 @@ async function handleActivate(kind: 'role' | 'group', params: ActivateParams): P
     };
     policyKey = `${account.tenantId}::${groupRecord.groupId}::${groupRecord.accessId}`;
     policyStoreName = 'group_policies';
+    expectActivation = { kind: 'group', groupId: groupRecord.groupId };
     refreshStalePolicy = () => refreshSingleGroupPolicy(account, groupRecord.groupId, groupRecord.accessId, groupRecord.displayName);
   }
   if (ticketNumber) body.ticketInfo = { ticketNumber, ticketSystem: ticketSystem ?? '' };
@@ -220,6 +290,14 @@ async function handleActivate(kind: 'role' | 'group', params: ActivateParams): P
   }
   await updateBadge();
   void checkExpiries().catch(() => {});
+
+  // Graph may not list the new assignment yet, so keep checking in the
+  // background. Skipped for approval-pending requests, where no activation is
+  // expected until an approver acts. Not awaited: the ack returns now and the
+  // popup updates from DB_CHANGED whenever the data lands.
+  if (finalStatus !== 'PendingApproval') {
+    void confirmActivationVisible(freshAccount, expectActivation).catch(() => {});
+  }
   return { ok: true };
 }
 

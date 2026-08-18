@@ -62,6 +62,17 @@
   --color-status-green:        #4ade80;
   --color-status-green-muted:  rgba(34, 197, 94, 0.20);
   --color-status-green-border: rgba(34, 197, 94, 0.35);
+
+  /* Opaque alert surfaces. The toast floats over scrolling content, so unlike
+     the -muted tokens above -- which are meant to tint whatever they sit on --
+     its background has to be fully opaque or the page text reads straight
+     through it. Mixed over surface-800 at the same ratio so the tint still
+     matches the rest of the status palette. The inner var resolves against
+     whichever surface-800 is in force, so .light gets the right base for free
+     and only the ratio is restated there. */
+  --color-alert-success: color-mix(in srgb, #22c55e 20%, var(--color-surface-800));
+  --color-alert-error:   color-mix(in srgb, #ef4444 20%, var(--color-surface-800));
+  --color-alert-info:    color-mix(in srgb, var(--color-brand-primary) 20%, var(--color-surface-800));
 }
 
 /* Light theme overrides -- applied when html has class="light" */
@@ -101,6 +112,10 @@
   --color-status-green:        #16a34a;
   --color-status-green-muted:  rgba(34, 197, 94, 0.12);
   --color-status-green-border: rgba(34, 197, 94, 0.30);
+
+  --color-alert-success: color-mix(in srgb, #22c55e 12%, var(--color-surface-800));
+  --color-alert-error:   color-mix(in srgb, #ef4444 12%, var(--color-surface-800));
+  --color-alert-info:    color-mix(in srgb, var(--color-brand-primary) 12%, var(--color-surface-800));
 }
 
 @layer components {

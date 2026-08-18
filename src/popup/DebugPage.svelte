@@ -15,7 +15,10 @@
   import { isMessageOfType, MessageType, sendCommand } from '../types/messages.js';
   import { loadLogs, loadDebugSnapshot, loadEntitlementTree, type DebugSnapshot, type AccountEntitlements, type EntitlementNode } from './data.js';
 
-  let { onBack }: { onBack: () => void } = $props();
+  let { onBack, addAlert }: {
+    onBack: () => void;
+    addAlert: (type: 'success' | 'error' | 'info', message: string) => void;
+  } = $props();
 
   let extensionSettings = $state<ExtensionSettingsRecord | null>(null);
   let snapshot = $state<DebugSnapshot | null>(null);
@@ -162,6 +165,19 @@
         {/if}
       </div>
     {/if}
+
+    <!-- In-popup alert trigger. The toast renders from App above every view,
+         including this one, so the variants can be compared side by side
+         without having to provoke a real activation or failure. -->
+    <div class="flex flex-col gap-1.5">
+      <span class="text-xs font-semibold uppercase tracking-wide text-text-faint">Alerts</span>
+      <div class="flex items-center gap-2">
+        <Button variant="ghost" onclick={() => addAlert('success', '"Global Administrator" activated successfully')} aria-label="Show a test success alert">Success</Button>
+        <Button variant="ghost" onclick={() => addAlert('error', 'Activation failed: the request was rejected by policy')} aria-label="Show a test error alert">Error</Button>
+        <Button variant="ghost" onclick={() => addAlert('info', 'Activation request submitted -- awaiting approval')} aria-label="Show a test info alert">Info</Button>
+      </div>
+      <p class="text-xs text-text-faint">Shows each in-popup alert without waiting for a real one. Scroll this page behind a toast to check nothing reads through it.</p>
+    </div>
 
     <!-- State snapshot -->
     {#if snapshot}

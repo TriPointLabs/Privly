@@ -59,6 +59,8 @@
     "https://portal.azure.com/*",
     "https://portal.azure.us/*",
     "https://entra.microsoft.com/*",
-    "https://entra.microsoft.us/*"
+    "https://entra.microsoft.us/*",
+    "https://intune.microsoft.com/*",
+    "https://intune.microsoft.us/*"
   ]
 }

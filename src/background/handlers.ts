@@ -420,7 +420,6 @@ async function handleSignInNew(payload: CommandPayload<'SIGN_IN_NEW'>): Promise<
       tokenEndpoint: discovery.tokenEndpoint,
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
-      idToken: tokens.idToken,
       tokenExpiresAt: tokens.tokenExpiresAt,
       // Preserve the user's preference on re-sign-in; default false for new accounts.
       showPermanentAssignments: existing?.showPermanentAssignments ?? false,

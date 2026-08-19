@@ -95,11 +95,11 @@ The `idb` library is used for all IndexedDB access. All schema and query logic l
 - Re-query on `DB_CHANGED` rather than holding data beyond a render cycle; MainPage debounces bursts (~100ms) so each query runs once per burst.
 - Azure detail views use the `by-scope`/`by-subscription` compound indexes rather than scanning `by-account` and filtering.
 
-### Schema overview (v15)
+### Schema overview (v17)
 Key ownership: `accounts.id` is a locally generated UUID (stable per `tenantId + accountId` pair via the unique `by-tenant-account` index). Child stores use server-issued IDs (Graph schedule IDs, approvalId, ARM instance GUIDs) or composite string keys, and reference `accounts.id` through an `accountId` field with a `by-account` index.
 
 ```
-accounts          -- id (local UUID), tenantId, accountId (Entra OID), tokens, ...
+accounts          -- id (local UUID), tenantId, accountId (Entra OID), access/refresh/ARM tokens, ...
 role_definitions  -- id (Graph roleDefinitionId); by-tenant ('' tenantId = shared built-in)
 roles             -- id (Graph eligibility schedule ID); by-account
 role_policies     -- id `${tenantId}::${roleDefinitionId}`; by-tenant; lastSyncedAt (TTL)
@@ -109,6 +109,7 @@ activations       -- id (Graph schedule ID); by-account; kind 'role'|'group'; ex
 approvals         -- id (Graph approvalId); by-account
 pending_requests  -- id (Graph request ID); by-account
 activating        -- id (Graph request ID); by-account; in-flight activation spinner state
+justification_prefills -- id (local UUID); by-account; saved justification texts, LRU-capped
 extension_settings-- single 'global' record (incl. loggingEnabled, logMaxEntries)
 states            -- ephemeral operation state (e.g. sign-in progress)
 azure_scopes      -- id (ARM scope path); by-account, by-subscription, by-parent

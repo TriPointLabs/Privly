@@ -305,7 +305,7 @@ export async function refreshAccountTokens(account: AccountRecord): Promise<void
     await db.put('accounts', {
       ...fresh2,
       accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
+      refreshToken: tokens.refreshToken ?? fresh2.refreshToken,
       idToken: tokens.idToken,
       tokenExpiresAt: tokens.tokenExpiresAt,
       loginHost: discovery.loginHost,
@@ -413,7 +413,10 @@ export async function acquireTokenInteractive(account: AccountRecord, claimsJson
   });
 
   // When ARM scopes are used, store the token as armAccessToken. Otherwise update the
-  // primary Graph token fields. Both paths preserve the refresh token and clear needsAttention.
+  // primary Graph token fields. Both paths clear needsAttention. The token endpoint is
+  // not guaranteed to return a refresh_token (the ARM exchange omits offline_access and
+  // relies on undocumented Entra behavior), so a missing one keeps the stored token
+  // rather than clobbering it with undefined.
   const db = await getDB();
   const freshAccount = await db.get('accounts', account.id) ?? account;
   if (isArmScope) {
@@ -421,14 +424,14 @@ export async function acquireTokenInteractive(account: AccountRecord, claimsJson
       ...freshAccount,
       armAccessToken: tokens.accessToken,
       armTokenExpiresAt: tokens.tokenExpiresAt,
-      refreshToken: tokens.refreshToken,
+      refreshToken: tokens.refreshToken ?? freshAccount.refreshToken,
       needsAttention: null,
     });
   } else {
     await db.put('accounts', {
       ...freshAccount,
       accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
+      refreshToken: tokens.refreshToken ?? freshAccount.refreshToken,
       idToken: tokens.idToken,
       tokenExpiresAt: tokens.tokenExpiresAt,
       needsAttention: null,

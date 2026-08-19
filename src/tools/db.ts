@@ -37,7 +37,6 @@ export interface AccountRecord {
   tokenEndpoint: string | null;
   accessToken: string | null;
   refreshToken: string | null;
-  idToken: string | null;
   /** Epoch milliseconds when the access token expires. */
   tokenExpiresAt: number | null;
   /** Access token scoped to the Azure Management API. Null until first ARM acquisition. */
@@ -615,7 +614,7 @@ export function getDB(): Promise<IDBPDatabase<PrivlyDB>> {
 }
 
 function openDBConnection(): Promise<IDBPDatabase<PrivlyDB>> {
-  return openDB<PrivlyDB>('privly', 16, {
+  return openDB<PrivlyDB>('privly', 17, {
     blocking() {
       // Another context is upgrading to a newer schema version. Close this
       // connection so the upgrade can proceed; the next getDB() reopens.
@@ -626,7 +625,7 @@ function openDBConnection(): Promise<IDBPDatabase<PrivlyDB>> {
       dbPromise = null;
     },
     async upgrade(db, oldVersion, newVersion, transaction) {
-      lastMigration = { from: oldVersion, to: newVersion ?? 16 };
+      lastMigration = { from: oldVersion, to: newVersion ?? 17 };
       if (oldVersion < 1) {
         const accounts = db.createObjectStore('accounts', { keyPath: 'id' });
         accounts.createIndex('by-tenant-account', ['tenantId', 'accountId'], { unique: true });
@@ -767,6 +766,18 @@ function openDBConnection(): Promise<IDBPDatabase<PrivlyDB>> {
         // and populate the list the first time they tick "Save for next time".
         const prefills = db.createObjectStore('justification_prefills', { keyPath: 'id' });
         prefills.createIndex('by-account', 'accountId');
+      }
+
+      if (oldVersion < 17) {
+        // AccountRecord loses idToken. The stored copy was write-only: its
+        // claims are materialized into account fields at sign-in and nothing
+        // ever read the raw JWT back, so the PII-bearing blob leaves the DB.
+        const accountStore = transaction.objectStore('accounts');
+        const existingAccounts = await accountStore.getAll();
+        for (const account of existingAccounts) {
+          delete (account as { idToken?: string }).idToken;
+          await accountStore.put(account);
+        }
       }
     },
   });

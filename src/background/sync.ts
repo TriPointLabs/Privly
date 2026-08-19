@@ -39,6 +39,7 @@ import {
   fetchAllPages,
   parsePolicyRules,
   notifyDbChanged,
+  graphErrorCode,
   ACTIVATING_STALE_TTL_MS,
   type RawPolicyRule,
 } from './utils.ts';
@@ -108,7 +109,7 @@ async function fetchPolicyRulesForPairs<K>(opts: {
   await withConcurrency(pairs, 5, async (pair) => {
     const res = await fetchAllPages<{ policyId?: string; properties?: { policyId?: string } }>(assignmentUrl(pair), { headers });
     if (!res.ok) {
-      log('warn', 'sync', `${logPrefix}: policy assignment fetch failed for ${label(pair)}: HTTP ${res.status} ${res.body}`);
+      log('warn', 'sync', `${logPrefix}: policy assignment fetch failed for ${label(pair)}: HTTP ${res.status} ${graphErrorCode(res.body)}`);
       return;
     }
     const policyId = res.items[0] ? policyIdOf(res.items[0]) : undefined;
@@ -490,8 +491,7 @@ export async function syncRoleAssignments(account: AccountRecord, { force = fals
   });
 
   if (!res.ok) {
-    log('warn', 'sync', `eligibleRoleAssignments failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status}`);
-    log('warn', 'sync', `  Response body: ${res.body}`);
+    log('warn', 'sync', `eligibleRoleAssignments failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${graphErrorCode(res.body)}`);
     return;
   }
 
@@ -596,7 +596,7 @@ export async function syncActiveAssignments(account: AccountRecord): Promise<voi
     headers: { Authorization: `Bearer ${account.accessToken}` },
   });
   if (!res.ok) {
-    log('warn', 'sync', `roleAssignmentSchedules failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${res.body}`);
+    log('warn', 'sync', `roleAssignmentSchedules failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${graphErrorCode(res.body)}`);
     return;
   }
 
@@ -694,8 +694,7 @@ export async function syncGroupAssignments(account: AccountRecord, { force = fal
   log('info', 'sync', `Fetching eligible group assignments for ${maskUpn(account.userPrincipalName)}`);
   const res = await fetchAllPages<GroupEligibilityItem>(url, { headers: { Authorization: `Bearer ${account.accessToken}` } });
   if (!res.ok) {
-    log('warn', 'sync', `Group eligibility schedules failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status}`);
-    log('warn', 'sync', `  Response: ${res.body}`);
+    log('warn', 'sync', `Group eligibility schedules failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${graphErrorCode(res.body)}`);
     return;
   }
 
@@ -794,7 +793,7 @@ export async function syncActiveGroupAssignments(account: AccountRecord): Promis
   log('info', 'sync', `Fetching active group assignments for ${maskUpn(account.userPrincipalName)}`);
   const res = await fetchAllPages<ActiveGroupScheduleItem>(url, { headers: { Authorization: `Bearer ${account.accessToken}` } });
   if (!res.ok) {
-    log('warn', 'sync', `Active group assignment schedules failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${res.body}`);
+    log('warn', 'sync', `Active group assignment schedules failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${graphErrorCode(res.body)}`);
     return;
   }
 
@@ -978,7 +977,7 @@ export async function syncAzureEligibleAssignments(account: AccountRecord, { for
   ]);
 
   if (!res.ok) {
-    log('warn', 'sync', `Azure: roleEligibilityScheduleInstances failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${res.body}`);
+    log('warn', 'sync', `Azure: roleEligibilityScheduleInstances failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${graphErrorCode(res.body)}`);
     return;
   }
 
@@ -1127,7 +1126,7 @@ async function syncAzurePolicyRules(account: AccountRecord, { force = false }: {
       const res = await fetchWithRetry(`${armHost}${policyId}?api-version=2020-10-01`, { headers: armHeaders });
       if (!res.ok) {
         const body = await res.text().catch(() => '(unreadable)');
-        log('warn', 'sync', `Azure: policy rules fetch failed for ${policyId}: HTTP ${res.status} ${body}`);
+        log('warn', 'sync', `Azure: policy rules fetch failed for ${policyId}: HTTP ${res.status} ${graphErrorCode(body)}`);
         return null;
       }
       const json = await res.json() as { properties?: { rules?: RawPolicyRule[] } };
@@ -1189,7 +1188,7 @@ export async function syncAzureActiveAssignments(account: AccountRecord): Promis
   log('info', 'sync', `Azure: fetching active assignments for ${maskUpn(account.userPrincipalName)}`);
   const res = await fetchAllPages<RawScheduleInstance>(url, { headers: { Authorization: `Bearer ${armToken}` } });
   if (!res.ok) {
-    log('warn', 'sync', `Azure: roleAssignmentScheduleInstances failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${res.body}`);
+    log('warn', 'sync', `Azure: roleAssignmentScheduleInstances failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${graphErrorCode(res.body)}`);
     return;
   }
 

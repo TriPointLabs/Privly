@@ -13,6 +13,7 @@ import { syncAzureEligibleAssignments, syncAzureActiveAssignments, refreshSingle
 import {
   notifyDbChanged,
   parseGraphError,
+  graphErrorCode,
   pollUntilProvisioned,
   fetchWithRetry,
   PENDING_ACTIVATION_STATUSES,
@@ -204,7 +205,7 @@ export async function handleDeactivateAzureRole(payload: DeactivateAzurePayload)
 
   if (!res.ok) {
     const bodyText = await res.text().catch(() => '(unreadable)');
-    log('error', 'activate', `DEACTIVATE_AZURE_ROLE failed: HTTP ${res.status} ${bodyText}`);
+    log('error', 'activate', `DEACTIVATE_AZURE_ROLE failed: HTTP ${res.status} ${graphErrorCode(bodyText)}`);
     const errorMsg = parseGraphError(bodyText, `Azure deactivation failed (HTTP ${res.status})`);
     await notify('Azure deactivation failed', errorMsg);
     return { ok: false, error: errorMsg };

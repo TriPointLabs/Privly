@@ -42,6 +42,7 @@ import { handleActivateAzureRole, handleDeactivateAzureRole } from './azureHandl
 import {
   notifyDbChanged,
   parseGraphError,
+  graphErrorCode,
   pollUntilProvisioned,
   fetchWithRetry,
   PENDING_ACTIVATION_STATUSES,
@@ -297,7 +298,7 @@ async function handleDeactivate(
 
   if (res.status !== 201) {
     const bodyText = await res.text().catch(() => '(unreadable)');
-    log('error', 'activate', `DEACTIVATE_${kind.toUpperCase()} failed: HTTP ${res.status} ${bodyText}`);
+    log('error', 'activate', `DEACTIVATE_${kind.toUpperCase()} failed: HTTP ${res.status} ${graphErrorCode(bodyText)}`);
     const errorMsg = parseGraphError(bodyText, `${kind === 'role' ? 'Deactivation' : 'Group deactivation'} failed (HTTP ${res.status})`);
     await notify(kind === 'role' ? 'Deactivation failed' : 'Group deactivation failed', errorMsg);
     return { ok: false, error: errorMsg };
@@ -349,7 +350,7 @@ async function performApprovalReview(
   });
   if (!stepsRes.ok) {
     const bodyText = await stepsRes.text();
-    log('error', 'approval', `${reviewResult} steps fetch failed: HTTP ${stepsRes.status} ${bodyText}`);
+    log('error', 'approval', `${reviewResult} steps fetch failed: HTTP ${stepsRes.status} ${graphErrorCode(bodyText)}`);
     return { ok: false, error: `Failed to fetch approval steps (HTTP ${stepsRes.status})` };
   }
 
@@ -366,7 +367,7 @@ async function performApprovalReview(
   if (!patchRes.ok) {
     const bodyText = await patchRes.text();
     const action = reviewResult === 'Approve' ? 'Approval' : 'Denial';
-    log('error', 'approval', `${reviewResult} patch failed: HTTP ${patchRes.status} ${bodyText}`);
+    log('error', 'approval', `${reviewResult} patch failed: HTTP ${patchRes.status} ${graphErrorCode(bodyText)}`);
     const errorMsg = parseGraphError(bodyText, `${action} failed (HTTP ${patchRes.status})`);
     return { ok: false, error: errorMsg };
   }
@@ -661,7 +662,7 @@ async function handleCancelRequest(payload: CommandPayload<'CANCEL_REQUEST'>): P
   // Graph returns 204 No Content on success.
   if (!cancelRes.ok) {
     const bodyText = await cancelRes.text();
-    log('error', 'approval', `CANCEL_REQUEST failed: HTTP ${cancelRes.status} ${bodyText}`);
+    log('error', 'approval', `CANCEL_REQUEST failed: HTTP ${cancelRes.status} ${graphErrorCode(bodyText)}`);
     return { ok: false, error: parseGraphError(bodyText, `Cancel failed (HTTP ${cancelRes.status})`) };
   }
 

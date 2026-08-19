@@ -271,7 +271,6 @@ export async function refreshAccountTokens(account: AccountRecord): Promise<void
       ...fresh,
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
-      idToken: tokens.idToken,
       tokenExpiresAt: tokens.tokenExpiresAt,
       needsAttention: null,
     });
@@ -306,7 +305,6 @@ export async function refreshAccountTokens(account: AccountRecord): Promise<void
       ...fresh2,
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
-      idToken: tokens.idToken,
       tokenExpiresAt: tokens.tokenExpiresAt,
       loginHost: discovery.loginHost,
       graphHost: discovery.graphHost,
@@ -429,7 +427,6 @@ export async function acquireTokenInteractive(account: AccountRecord, claimsJson
       ...freshAccount,
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
-      idToken: tokens.idToken,
       tokenExpiresAt: tokens.tokenExpiresAt,
       needsAttention: null,
     });

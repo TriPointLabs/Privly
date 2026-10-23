@@ -24,7 +24,7 @@ import {
   type TokenSet,
 } from '../tools/oauth.ts';
 import { notifyDbChanged } from './utils.ts';
-import { log, maskUpn } from './log.ts';
+import { log, maskUpn, shortId } from './log.ts';
 
 /** Returns the space-split `scp` claim of a Graph access token, or [] if it cannot be decoded. */
 export function scopesFromToken(accessToken: string): string[] {
@@ -127,6 +127,38 @@ async function runAuthCodeFlow(params: {
   const code = responseParams.get('code');
   if (!code) throw new Error(responseParams.get('error_description') ?? 'No authorization code in response');
   return exchangeCodeForTokens({ tokenEndpoint, clientId, code, redirectUri, verifier, scopes, claimsJson });
+}
+
+/**
+ * Confirms a freshly acquired token set belongs to `account` before it is
+ * persisted over the account's stored tokens.
+ *
+ * Initial sign-in verifies the ID token and creates the record from its
+ * claims, but re-auth flows write into an existing record: `loginHint` is a
+ * hint only, so the user can pick a different account in the Microsoft
+ * account chooser (or hold a different SSO session in the silent flows) and
+ * the wrong identity's tokens would land under this record. The tokens come
+ * straight from the token endpoint over TLS via our own PKCE exchange, so a
+ * claims decode (no signature check) is sufficient to compare identities.
+ *
+ * ARM-scoped flows request no `openid` scope and return no ID token; the ARM
+ * access token is a JWT carrying the same `oid`/`tid` claims, so it is
+ * decoded instead.
+ * @param account - The record the tokens are about to be written to.
+ * @param tokens - The freshly acquired token set (`idToken` absent on ARM flows).
+ * @throws If the token's `oid`/`tid` do not match the account record.
+ */
+function assertTokenMatchesAccount(
+  account: AccountRecord,
+  tokens: { accessToken: string; idToken?: string }
+): void {
+  const claims = decodeJwt(tokens.idToken || tokens.accessToken) as { oid?: string; tid?: string };
+  if (claims.oid !== account.accountId || claims.tid !== account.tenantId) {
+    log('warn', 'auth', `Token identity mismatch for ${maskUpn(account.userPrincipalName)}: expected oid ${shortId(account.accountId)} tid ${shortId(account.tenantId)}, got oid ${shortId(claims.oid)} tid ${shortId(claims.tid)}; tokens discarded`);
+    throw new Error(
+      `Signed-in identity does not match ${maskUpn(account.userPrincipalName)} (account or tenant differs); tokens discarded`
+    );
+  }
 }
 
 /**
@@ -234,6 +266,7 @@ export async function refreshArmToken(
       loginHint: account.userPrincipalName,
       prompt: 'none',
     });
+    assertTokenMatchesAccount(account, { accessToken: armTokens.accessToken });
     const fresh3 = await db.get('accounts', accountId);
     if (!fresh3) return;
     await db.put('accounts', { ...fresh3, armAccessToken: armTokens.accessToken, armTokenExpiresAt: armTokens.tokenExpiresAt });
@@ -319,6 +352,7 @@ export async function refreshAccountTokens(account: AccountRecord): Promise<void
       loginHint: account.userPrincipalName,
       prompt: 'none',
     });
+    assertTokenMatchesAccount(account, tokens);
 
     const fresh2 = await db.get('accounts', account.id) ?? account;
     await db.put('accounts', {
@@ -463,6 +497,7 @@ export async function acquireTokenInteractive(
       log('info', 'auth', 'ARM not consented; retrying re-auth with base scopes only');
       return authorize();
     });
+  assertTokenMatchesAccount(account, tokens);
 
   // When ARM scopes are used, store the token as armAccessToken. Otherwise update the
   // primary Graph token fields. Both paths clear needsAttention. The token endpoint is

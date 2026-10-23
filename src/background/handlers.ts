@@ -490,12 +490,12 @@ async function handleSignOut(payload: CommandPayload<'SIGN_OUT'>): Promise<Comma
   const tenantId = account?.tenantId;
 
   // Delete account and all associated FK records in a single transaction.
-  // Tenant-scoped stores (role_definitions, role_policies, group_policies) are only
+  // Tenant-scoped stores (role_definitions, role_policies, group_policies, directory_scopes) are only
   // cleaned when no other accounts remain in the same tenant.
   const tx = db.transaction(
     ['accounts', 'roles', 'groups', 'activations', 'approvals',
      'pending_requests', 'activating', 'states',
-     'role_definitions', 'role_policies', 'group_policies',
+     'role_definitions', 'role_policies', 'group_policies', 'directory_scopes',
      'azure_scopes', 'azure_roles', 'azure_activations', 'azure_policies',
      'justification_prefills'],
     'readwrite'
@@ -529,13 +529,14 @@ async function handleSignOut(payload: CommandPayload<'SIGN_OUT'>): Promise<Comma
   const stateKeys = allStates.filter(s => s.accountId === accountId).map(s => s.id);
 
   // Tenant-scoped keys: only fetched when this is the last account in the tenant.
-  const [rolePolicyKeys, groupPolicyKeys, customRoleDefKeys] = isLastInTenant && tenantId
+  const [rolePolicyKeys, groupPolicyKeys, customRoleDefKeys, directoryScopeKeys] = isLastInTenant && tenantId
     ? await Promise.all([
         tx.objectStore('role_policies').index('by-tenant').getAllKeys(tenantId),
         tx.objectStore('group_policies').index('by-tenant').getAllKeys(tenantId),
         tx.objectStore('role_definitions').index('by-tenant').getAllKeys(tenantId),
+        tx.objectStore('directory_scopes').index('by-tenant').getAllKeys(tenantId),
       ])
-    : [[], [], []];
+    : [[], [], [], []];
 
   await Promise.all([
     ...roleKeys.map(k => tx.objectStore('roles').delete(k)),
@@ -553,6 +554,7 @@ async function handleSignOut(payload: CommandPayload<'SIGN_OUT'>): Promise<Comma
     ...rolePolicyKeys.map(k => tx.objectStore('role_policies').delete(k)),
     ...groupPolicyKeys.map(k => tx.objectStore('group_policies').delete(k)),
     ...customRoleDefKeys.map(k => tx.objectStore('role_definitions').delete(k)),
+    ...directoryScopeKeys.map(k => tx.objectStore('directory_scopes').delete(k)),
     tx.objectStore('accounts').delete(accountId),
   ]);
   await tx.done;

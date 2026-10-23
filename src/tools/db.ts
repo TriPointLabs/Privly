@@ -96,6 +96,21 @@ export interface RolePolicyRecord {
   lastSyncedAt?: number;
 }
 
+/**
+ * Cached display name for an Entra directory scope (currently administrative units only).
+ * Keyed as `${tenantId}::${directoryScopeId}`.
+ */
+export interface DirectoryScopeRecord {
+  /** Composite key: `${tenantId}::${directoryScopeId}` */
+  id: string;
+  tenantId: string;
+  /** Directory scope path, e.g. `/administrativeUnits/{id}`. */
+  directoryScopeId: string;
+  displayName: string;
+  /** Epoch milliseconds when this record was last fetched. */
+  lastSyncedAt: number;
+}
+
 /** A PIM-eligible group assignment synced from Graph privilegedAccess/group/eligibilitySchedules. */
 export interface GroupRecord {
   /** Graph eligibility schedule ID (used as IDB key for dedup). */
@@ -468,6 +483,13 @@ interface PrivlyDB extends DBSchema {
       'by-tenant': string;
     };
   };
+  directory_scopes: {
+    key: string;
+    value: DirectoryScopeRecord;
+    indexes: {
+      'by-tenant': string;
+    };
+  };
   roles: {
     key: string;
     value: RoleRecord;
@@ -606,6 +628,7 @@ let dbPromise: Promise<IDBPDatabase<PrivlyDB>> | null = null;
  * - v14: `AccountRecord` gains `tenantDisplayName` from Graph `/organization` `displayName`
  * - v15: `logs` store added; `extension_settings` gains `loggingEnabled` and `logMaxEntries`
  * - v16: `justification_prefills` store added (saved activation justifications, CS-3)
+ * - v18: `directory_scopes` store added (cached admin unit display names)
  * @returns A typed `IDBPDatabase` handle for the Privly database.
  */
 export function getDB(): Promise<IDBPDatabase<PrivlyDB>> {
@@ -618,7 +641,7 @@ export function getDB(): Promise<IDBPDatabase<PrivlyDB>> {
 }
 
 function openDBConnection(): Promise<IDBPDatabase<PrivlyDB>> {
-  return openDB<PrivlyDB>('privly', 17, {
+  return openDB<PrivlyDB>('privly', 18, {
     blocking() {
       // Another context is upgrading to a newer schema version. Close this
       // connection so the upgrade can proceed; the next getDB() reopens.
@@ -782,6 +805,11 @@ function openDBConnection(): Promise<IDBPDatabase<PrivlyDB>> {
           delete (account as { idToken?: string }).idToken;
           await accountStore.put(account);
         }
+      }
+
+      if (oldVersion < 18) {
+        const directoryScopes = db.createObjectStore('directory_scopes', { keyPath: 'id' });
+        directoryScopes.createIndex('by-tenant', 'tenantId');
       }
     },
   });

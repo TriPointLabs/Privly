@@ -70,11 +70,11 @@
         refreshAccounts();
         return;
       }
-      if (stores.has('roles') || stores.has('role_definitions') || stores.has('role_policies') || stores.has('activations')) refreshRoles();
-      if (stores.has('activations') || stores.has('azure_roles') || stores.has('azure_scopes') || stores.has('azure_activations')) refreshActivations();
+      if (stores.has('roles') || stores.has('role_definitions') || stores.has('role_policies') || stores.has('activations') || stores.has('directory_scopes')) refreshRoles();
+      if (stores.has('activations') || stores.has('directory_scopes') || stores.has('azure_roles') || stores.has('azure_scopes') || stores.has('azure_activations')) refreshActivations();
       if (stores.has('groups') || stores.has('group_policies') || stores.has('activations')) refreshGroups();
-      if (stores.has('approvals')) refreshApprovals();
-      if (stores.has('pending_requests')) refreshPendingRequests();
+      if (stores.has('approvals') || stores.has('directory_scopes')) refreshApprovals();
+      if (stores.has('pending_requests') || stores.has('directory_scopes')) refreshPendingRequests();
       if (stores.has('activating')) refreshActivating();
       if (stores.has('azure_roles') || stores.has('azure_scopes') || stores.has('azure_activations')) refreshAzureRoles();
       if (stores.has('justification_prefills')) refreshPrefills();
@@ -143,11 +143,13 @@
   }
 
   async function refreshApprovals() {
-    pendingApprovals = activeAccountId ? await loadApprovals(activeAccountId) : [];
+    const account = accounts.find(a => a.id === activeAccountId);
+    pendingApprovals = account ? await loadApprovals(account) : [];
   }
 
   async function refreshPendingRequests() {
-    myPendingRequests = activeAccountId ? await loadPendingRequests(activeAccountId) : [];
+    const account = accounts.find(a => a.id === activeAccountId);
+    myPendingRequests = account ? await loadPendingRequests(account) : [];
   }
 
   async function refreshActivating() {

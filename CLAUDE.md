@@ -95,7 +95,7 @@ The `idb` library is used for all IndexedDB access. All schema and query logic l
 - Re-query on `DB_CHANGED` rather than holding data beyond a render cycle; MainPage debounces bursts (~100ms) so each query runs once per burst.
 - Azure detail views use the `by-scope`/`by-subscription` compound indexes rather than scanning `by-account` and filtering.
 
-### Schema overview (v17)
+### Schema overview (v18)
 Key ownership: `accounts.id` is a locally generated UUID (stable per `tenantId + accountId` pair via the unique `by-tenant-account` index). Child stores use server-issued IDs (Graph schedule IDs, approvalId, ARM instance GUIDs) or composite string keys, and reference `accounts.id` through an `accountId` field with a `by-account` index.
 
 ```
@@ -105,6 +105,7 @@ roles             -- id (Graph eligibility schedule ID); by-account
 role_policies     -- id `${tenantId}::${roleDefinitionId}`; by-tenant; lastSyncedAt (TTL)
 groups            -- id (Graph eligibility schedule ID); by-account
 group_policies    -- id `${tenantId}::${groupId}::${accessId}`; by-tenant; lastSyncedAt (TTL)
+directory_scopes  -- id `${tenantId}::${directoryScopeId}`; by-tenant; admin unit display names; lastSyncedAt (TTL)
 activations       -- id (Graph schedule ID); by-account; kind 'role'|'group'; expiry-notification flags
 approvals         -- id (Graph approvalId); by-account
 pending_requests  -- id (Graph request ID); by-account

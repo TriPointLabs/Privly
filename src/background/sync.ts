@@ -18,6 +18,7 @@ import {
   type RoleRecord,
   type RoleDefinitionRecord,
   type RolePolicyRecord,
+  type DirectoryScopeRecord,
   type ActivationRecord,
   type GroupRecord,
   type GroupPolicyRecord,
@@ -46,7 +47,7 @@ import {
 import { reconcilePendingApprovalAlarm, updateBadge } from './badge.ts';
 import { refreshAccountTokens, refreshArmToken, fetchTenantInfo } from './auth.ts';
 import { sendNotification } from '../types/messages.ts';
-import { log, maskUpn } from './log.ts';
+import { log, maskUpn, shortId } from './log.ts';
 import { checkExpiries } from './expiry.ts';
 
 /**
@@ -228,6 +229,74 @@ async function syncPolicyRules(
 }
 
 /**
+ * Resolves administrative unit display names for AU-scoped role directoryScopeIds and caches
+ * them in `directory_scopes`. Needs the admin-consented `AdministrativeUnit.Read.All` scope;
+ * without it Graph returns 403, which is logged per id and otherwise ignored so labels fall
+ * back to the raw ID. Records fresher than POLICY_TTL_MS are skipped unless `force`.
+ */
+async function resolveDirectoryScopeNames(
+  account: AccountRecord,
+  directoryScopeIds: string[],
+  { force = false }: { force?: boolean } = {},
+): Promise<void> {
+  if (!account.accessToken || !account.graphHost) return;
+
+  const auIds = new Map<string, string>();
+  for (const scopeId of directoryScopeIds) {
+    const match = /^\/administrativeUnits\/([^/]+)$/i.exec(scopeId ?? '');
+    if (match) auIds.set(scopeId, match[1]);
+  }
+  let pending = [...auIds.keys()];
+  if (pending.length === 0) return;
+
+  if (!force) {
+    const cacheDb = await getDB();
+    const cutoff = Date.now() - POLICY_TTL_MS;
+    const cached = await Promise.all(pending.map(id => cacheDb.get('directory_scopes', `${account.tenantId}::${id}`)));
+    pending = pending.filter((_, i) => (cached[i]?.lastSyncedAt ?? 0) < cutoff);
+    if (pending.length === 0) return;
+  }
+
+  const headers = { Authorization: `Bearer ${account.accessToken}` };
+  const records: DirectoryScopeRecord[] = [];
+  await withConcurrency(pending, 5, async (directoryScopeId) => {
+    const auId = auIds.get(directoryScopeId)!;
+    const res = await fetchWithRetry(
+      `${account.graphHost}/v1.0/directory/administrativeUnits/${auId}?$select=id,displayName`,
+      { headers },
+    );
+    if (!res.ok) {
+      // 403 means the tenant has not consented to AdministrativeUnit.Read.All; the label falls back to the ID.
+      log('warn', 'sync', `Admin unit name fetch failed for ${shortId(auId)}: HTTP ${res.status}`);
+      return;
+    }
+    const au = await res.json() as { displayName?: string };
+    if (!au.displayName) return;
+    records.push({
+      id: `${account.tenantId}::${directoryScopeId}`,
+      tenantId: account.tenantId,
+      directoryScopeId,
+      displayName: au.displayName,
+      lastSyncedAt: Date.now(),
+    });
+  });
+  if (records.length === 0) return;
+
+  const db = await getDB();
+  const tx = db.transaction('directory_scopes', 'readwrite');
+  await Promise.all(records.map(r => tx.store.put(r)));
+  await tx.done;
+
+  log('info', 'sync', `Cached ${records.length} admin unit name(s) for ${maskUpn(account.userPrincipalName)}`);
+  notifyDbChanged('directory_scopes');
+}
+
+/** Logs instead of throwing so a name-resolution failure never fails the parent sync. */
+function logDirectoryScopeError(err: unknown): void {
+  log('warn', 'sync', `Admin unit name resolution failed: ${err instanceof Error ? err.message : String(err)}`);
+}
+
+/**
  * Fetches PIM approval requests where the current user is an approver (both role
  * and group kinds). Replaces all existing approval records for this account in
  * the `approvals` store.
@@ -328,6 +397,8 @@ export async function syncPendingApprovals(account: AccountRecord): Promise<void
   log('info', 'sync', `Stored ${newApprovals.length} pending approval(s) for ${maskUpn(account.userPrincipalName)}`);
   notifyDbChanged('approvals');
 
+  await resolveDirectoryScopeNames(account, roleItems.map(r => r.directoryScopeId!).filter(Boolean)).catch(logDirectoryScopeError);
+
   if (newApprovals.length > 0) {
     await notify(
       'Approval required',
@@ -424,6 +495,7 @@ export async function syncMyPendingRequests(account: AccountRecord): Promise<voi
 
   log('info', 'sync', `Stored ${newRequests.length} pending request(s) for ${maskUpn(account.userPrincipalName)}`);
   notifyDbChanged('pending_requests');
+  await resolveDirectoryScopeNames(account, roleItems.map(r => r.directoryScopeId!).filter(Boolean)).catch(logDirectoryScopeError);
   await reconcilePendingApprovalAlarm();
 }
 
@@ -559,6 +631,7 @@ export async function syncRoleAssignments(account: AccountRecord, { force = fals
 
   const roleNamesMap = new Map(roleDefs.map(d => [d.id, d.displayName]));
   await syncPolicyRules(account, roleDefinitionIds, roleNamesMap, policyQueryIds, { force });
+  await resolveDirectoryScopeNames(account, items.map(i => i.directoryScopeId), { force }).catch(logDirectoryScopeError);
 }
 
 /**
@@ -659,6 +732,7 @@ export async function syncActiveAssignments(account: AccountRecord): Promise<voi
 
   log('info', 'sync', `Wrote ${newActivations.length} active assignment(s) for ${maskUpn(account.userPrincipalName)}`);
   notifyDbChanged('activations');
+  await resolveDirectoryScopeNames(account, items.map(i => i.directoryScopeId)).catch(logDirectoryScopeError);
 }
 
 /**

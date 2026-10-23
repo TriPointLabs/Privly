@@ -173,7 +173,7 @@
         <div class="flex flex-col rounded-lg overflow-hidden border border-surface-600 divide-y divide-surface-700">
           <div class="detail-row">
             <span class="text-xs text-text-tertiary shrink-0">Directory scope</span>
-            <span class="text-xs text-text-primary font-medium truncate ml-4">{formatDirectoryScopeLabel(directoryScopeId)}</span>
+            <span class="text-xs text-text-primary font-medium truncate ml-4">{formatDirectoryScopeLabel(directoryScopeId, target.data.directoryScopeName)}</span>
           </div>
           <div class="detail-row gap-2">
             <span class="text-xs text-text-tertiary shrink-0">Scope</span>

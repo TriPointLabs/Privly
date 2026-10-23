@@ -390,6 +390,8 @@ export function getScopes(cloud: CloudType): string[] {
     'PrivilegedEligibilitySchedule.Read.AzureADGroup',
     'PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup',
     'RoleManagementPolicy.Read.AzureADGroup',
+    // Resolves admin unit names for AU-scoped roles; requires admin consent.
+    'AdministrativeUnit.Read.All',
   ];
   if (cloud === 'gcch') {
     return [...base, ...graphScopes.map(s => `https://graph.microsoft.us/${s}`)];
@@ -413,7 +415,7 @@ export function getArmHost(cloud: CloudType): string {
 
 /**
  * Returns the OAuth2 scope to request for the Azure Management API.
- * ARM only requires `user_impersonation` — no OIDC base scopes are included.
+ * ARM only requires `user_impersonation` -- no OIDC base scopes are included.
  * @param cloud - The cloud environment.
  * @returns Array containing the single ARM scope string.
  */

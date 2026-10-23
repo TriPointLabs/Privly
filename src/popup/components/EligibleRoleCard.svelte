@@ -23,8 +23,8 @@
       {#if role.scope}
         <span class="text-xs text-text-disabled truncate">{formatScopeLabel(role.scope)}</span>
       {/if}
-      {#if formatDirectoryScopeLabel(role.directoryScopeId)}
-        <span class="text-xs text-text-disabled truncate">{formatDirectoryScopeLabel(role.directoryScopeId)}</span>
+      {#if formatDirectoryScopeLabel(role.directoryScopeId, role.directoryScopeName)}
+        <span class="text-xs text-text-disabled truncate">{formatDirectoryScopeLabel(role.directoryScopeId, role.directoryScopeName)}</span>
       {/if}
     </div>
   </div>

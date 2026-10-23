@@ -13,7 +13,7 @@ import type { ExtensionSettingsRecord } from '../tools/db.js';
 
 /** Union of all IndexedDB store names that can appear in a `DB_CHANGED` message. */
 export type StoreName =
-  | 'accounts' | 'role_definitions' | 'role_policies' | 'roles' | 'groups' | 'group_policies'
+  | 'accounts' | 'role_definitions' | 'role_policies' | 'directory_scopes' | 'roles' | 'groups' | 'group_policies'
   | 'activations' | 'activating' | 'approvals' | 'pending_requests' | 'extension_settings' | 'states'
   | 'azure_scopes' | 'azure_roles' | 'azure_activations' | 'azure_policies' | 'justification_prefills';
 

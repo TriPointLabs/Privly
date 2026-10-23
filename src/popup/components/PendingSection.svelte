@@ -86,8 +86,8 @@
           <div class="flex flex-col gap-0.5">
             <span class="text-[10px] font-semibold text-text-faint uppercase tracking-wider">Approving</span>
             <span class="text-sm text-text-primary">{approval.roleName}</span>
-            {#if formatDirectoryScopeLabel(approval.directoryScopeId)}
-              <span class="text-xs text-text-faint truncate">{formatDirectoryScopeLabel(approval.directoryScopeId)}</span>
+            {#if formatDirectoryScopeLabel(approval.directoryScopeId, approval.directoryScopeName)}
+              <span class="text-xs text-text-faint truncate">{formatDirectoryScopeLabel(approval.directoryScopeId, approval.directoryScopeName)}</span>
             {/if}
             <span class="text-xs text-text-muted">{approval.requestorName} requested {formatDuration(approval.durationRequested)}</span>
           </div>
@@ -136,8 +136,8 @@
           <div class="flex items-center gap-2">
             <div class="flex flex-col gap-0.5 flex-1 min-w-0">
               <span class="text-sm text-text-primary">{approval.roleName}</span>
-              {#if formatDirectoryScopeLabel(approval.directoryScopeId)}
-                <span class="text-xs text-text-faint truncate">{formatDirectoryScopeLabel(approval.directoryScopeId)}</span>
+              {#if formatDirectoryScopeLabel(approval.directoryScopeId, approval.directoryScopeName)}
+                <span class="text-xs text-text-faint truncate">{formatDirectoryScopeLabel(approval.directoryScopeId, approval.directoryScopeName)}</span>
               {/if}
               <span class="text-xs text-text-muted">Requested by {approval.requestorName}</span>
             </div>
@@ -176,7 +176,7 @@
             </div>
           {/if}
 
-          <!-- Action buttons — always visible -->
+          <!-- Action buttons -- always visible -->
           <div class="flex gap-2 mt-2 pt-2 border-t border-surface-600 -mx-3 px-3">
             <Button
               variant="approve"
@@ -217,8 +217,8 @@
           {#if req.scope}
             <span class="text-xs text-text-faint truncate">{formatScopeLabel(req.scope)}</span>
           {/if}
-          {#if formatDirectoryScopeLabel(req.directoryScopeId)}
-            <span class="text-xs text-text-faint truncate">{formatDirectoryScopeLabel(req.directoryScopeId)}</span>
+          {#if formatDirectoryScopeLabel(req.directoryScopeId, req.directoryScopeName)}
+            <span class="text-xs text-text-faint truncate">{formatDirectoryScopeLabel(req.directoryScopeId, req.directoryScopeName)}</span>
           {/if}
         </div>
         <div class="flex items-center gap-2 shrink-0 ml-2">

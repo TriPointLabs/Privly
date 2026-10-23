@@ -47,6 +47,8 @@ export interface AccountRecord {
   grantedScopes?: string[];
   /** True once the user chose "Not now" on the admin unit permission banner. */
   auScopePromptDismissed?: boolean;
+  /** User-facing message from the last failed GRANT_AU_SCOPE attempt; cleared when a new attempt starts or succeeds. */
+  auScopeGrantError?: string;
 }
 
 /**

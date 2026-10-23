@@ -5,6 +5,7 @@
   import { getExtensionSettings } from '../tools/db.js';
   import type { AccountRecord, ExtensionSettingsRecord } from '../tools/db.js';
   import { AU_SCOPE } from '../tools/oauth.js';
+  import { consentUrlFor } from '../constants';
   import { loadAccounts } from './data.js';
   import { isMessageOfType, MessageType, sendCommand } from '../types/messages.js';
   import { applyTheme, resolveTheme, cacheThemePreference, type ThemePreference } from './theme.js';
@@ -14,7 +15,7 @@
   let extensionSettings = $state<ExtensionSettingsRecord | null>(null);
   let activeAccount = $state<AccountRecord | null>(null);
   let auPending = $state(false);
-  let auError = $state<string | null>(null);
+  const consentUrl = $derived(activeAccount ? consentUrlFor(activeAccount.cloud) : null);
 
   // CRITICAL: register listener synchronously before any await
   browser.runtime.onMessage.addListener((message) => {
@@ -31,10 +32,14 @@
   async function grantAuScope() {
     if (!activeAccount) return;
     auPending = true;
-    auError = null;
-    const ack = await sendCommand(MessageType.GRANT_AU_SCOPE, { accountId: activeAccount.id });
-    auPending = false;
-    if (!ack.ok) auError = ack.error ?? 'Could not enable the permission';
+    // The consent window can close the popup, so the ack is unreliable; failures arrive via auScopeGrantError.
+    try {
+      await sendCommand(MessageType.GRANT_AU_SCOPE, { accountId: activeAccount.id });
+    } catch {
+      // Outcome is persisted on the account record.
+    } finally {
+      auPending = false;
+    }
   }
 
   async function refreshExtensionSettings() {
@@ -174,8 +179,13 @@
               {/if}
             </div>
             <p class="text-xs text-text-faint pr-10">Show admin unit names on AU-scoped roles. Needs the Read administrative units permission, which an administrator may need to approve.</p>
-            {#if auError}
-              <p role="alert" class="text-xs text-status-red">{auError}</p>
+            {#if activeAccount.auScopeGrantError}
+              <p role="alert" class="text-xs text-status-red">{activeAccount.auScopeGrantError}</p>
+              {#if consentUrl}
+                <a href={consentUrl} target="_blank" rel="noopener noreferrer" class="text-xs text-brand-secondary underline break-all">
+                  {consentUrl}
+                </a>
+              {/if}
             {/if}
           </div>
         </div>

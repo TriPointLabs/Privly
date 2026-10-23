@@ -487,26 +487,38 @@ async function handleSignInInteractive(payload: CommandPayload<'SIGN_IN_INTERACT
 }
 
 /** GRANT_AU_SCOPE -- interactively request the optional AU scope, then resync so admin unit names resolve. */
+/** Re-read the account and persist (or clear) the last AU scope grant error. */
+async function setAuScopeGrantError(accountId: string, auScopeGrantError: string | undefined): Promise<void> {
+  const db = await getDB();
+  const fresh = await db.get('accounts', accountId);
+  if (!fresh) return;
+  await db.put('accounts', { ...fresh, auScopeGrantError });
+  notifyDbChanged('accounts');
+}
+
 async function handleGrantAuScope(payload: CommandPayload<'GRANT_AU_SCOPE'>): Promise<CommandAck> {
   const { accountId } = payload;
   const db = await getDB();
   const account = await db.get('accounts', accountId);
   if (!account) return { ok: false, error: 'Account not found' };
+  // The consent window closes the popup, so the ack may never be read; the outcome is persisted on the account instead.
+  await setAuScopeGrantError(accountId, undefined);
   try {
     await acquireTokenInteractive(account, undefined, getScopes(account.cloud, { includeOptional: true }), 'graph');
   } catch (e) {
-    const error = e instanceof Error ? e.message : String(e);
-    log('warn', 'account', `AU scope grant failed for ${maskUpn(account.userPrincipalName)}: ${error}`);
-    if (isConsentError(e)) {
-      return { ok: false, error: 'An administrator must approve this permission. Share the admin consent link from the sign-in page with them.' };
-    }
+    const message = e instanceof Error ? e.message : String(e);
+    log('warn', 'account', `AU scope grant failed for ${maskUpn(account.userPrincipalName)}: ${message}`);
+    const error = isConsentError(e)
+      ? 'An administrator must approve this permission. Share the admin consent link from the sign-in page with them.'
+      : message;
+    await setAuScopeGrantError(accountId, error);
     return { ok: false, error };
   }
   const freshDb = await getDB();
   const fresh = await freshDb.get('accounts', accountId);
   if (!fresh) return { ok: false, error: 'Account not found' };
   // Clicking Enable (banner or Settings) brings the banner back into play if it was dismissed earlier.
-  const updated = { ...fresh, auScopePromptDismissed: false };
+  const updated = { ...fresh, auScopePromptDismissed: false, auScopeGrantError: undefined };
   await freshDb.put('accounts', updated);
   notifyDbChanged('accounts');
   // The grant itself succeeded; a sync failure only delays the names until the next cycle.

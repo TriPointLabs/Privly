@@ -76,6 +76,17 @@ export async function loadAccounts(): Promise<{ accounts: AccountRecord[]; activ
  * from `role_definitions` and policy rules from `role_policies`. Roles with a
  * live active assignment are filtered out.
  */
+/** Returns cached admin unit names from `directory_scopes`, keyed by directoryScopeId. IDs without a cached name are absent. */
+async function loadDirectoryScopeNames(
+  db: Awaited<ReturnType<typeof getDB>>,
+  tenantId: string,
+  directoryScopeIds: (string | undefined)[],
+): Promise<Map<string, string>> {
+  const ids = [...new Set(directoryScopeIds.filter((id): id is string => !!id && id !== '/'))];
+  const records = await Promise.all(ids.map(id => db.get('directory_scopes', `${tenantId}::${id}`)));
+  return new Map(records.filter(r => r !== undefined).map(r => [r.directoryScopeId, r.displayName]));
+}
+
 export async function loadEligibleRoles(account: AccountRecord): Promise<EligibleRole[]> {
   const db = await getDB();
   const [roleRecords, activationRecords] = await Promise.all([
@@ -90,9 +101,10 @@ export async function loadEligibleRoles(account: AccountRecord): Promise<Eligibl
       .map(a => `${a.roleDefinitionId}::${a.directoryScopeId ?? '/'}`)
   );
   const eligible = roleRecords.filter(r => !activeRoleKeys.has(`${r.roleDefinitionId}::${r.directoryScopeId}`));
-  const [defs, policies] = await Promise.all([
+  const [defs, policies, scopeNames] = await Promise.all([
     Promise.all(eligible.map(r => db.get('role_definitions', r.roleDefinitionId))),
     Promise.all(eligible.map(r => db.get('role_policies', `${account.tenantId}::${r.roleDefinitionId}`))),
+    loadDirectoryScopeNames(db, account.tenantId, eligible.map(r => r.directoryScopeId)),
   ]);
   return eligible.map((r, i) => ({
     id: r.id,
@@ -100,6 +112,7 @@ export async function loadEligibleRoles(account: AccountRecord): Promise<Eligibl
     isBuiltIn: defs[i]?.isBuiltIn ?? false,
     roleType: 'EntraRole' as const,
     directoryScopeId: r.directoryScopeId,
+    directoryScopeName: scopeNames.get(r.directoryScopeId),
     memberType: r.memberType,
     policyRules: toPolicyRules(policies[i]),
   }));
@@ -126,10 +139,11 @@ export async function loadActiveAssignments(account: AccountRecord): Promise<Act
   // groupId → GroupRecord for display name lookups without additional fetches.
   const groupByGroupId = new Map(allGroupRecords.map(g => [g.groupId, g]));
 
-  const [roleDefs, rolePolicies, groupPolicies] = await Promise.all([
+  const [roleDefs, rolePolicies, groupPolicies, scopeNames] = await Promise.all([
     Promise.all(roleActivations.map(a => db.get('role_definitions', a.roleDefinitionId!))),
     Promise.all(roleActivations.map(a => db.get('role_policies', `${account.tenantId}::${a.roleDefinitionId!}`))),
     Promise.all(groupActivations.map(a => db.get('group_policies', `${account.tenantId}::${a.groupId!}::${a.accessId!}`))),
+    loadDirectoryScopeNames(db, account.tenantId, roleActivations.map(a => a.directoryScopeId)),
   ]);
 
   const roleAssignments: ActiveRoleAssignment[] = roleActivations.map((a, i) => ({
@@ -138,6 +152,7 @@ export async function loadActiveAssignments(account: AccountRecord): Promise<Act
     isBuiltIn: roleDefs[i]?.isBuiltIn ?? false,
     roleType: 'EntraRole' as const,
     directoryScopeId: a.directoryScopeId,
+    directoryScopeName: a.directoryScopeId ? scopeNames.get(a.directoryScopeId) : undefined,
     isPermanent: a.isPermanent,
     memberType: a.memberType,
     startedAt: a.startedAt != null ? new Date(a.startedAt) : undefined,
@@ -208,9 +223,10 @@ export async function loadEligibleGroups(account: AccountRecord): Promise<Eligib
 }
 
 /** Loads pending approval records where the user is the approver. */
-export async function loadApprovals(accountId: string): Promise<ApprovalItem[]> {
+export async function loadApprovals(account: AccountRecord): Promise<ApprovalItem[]> {
   const db = await getDB();
-  const records: ApprovalRecord[] = await db.getAllFromIndex('approvals', 'by-account', accountId);
+  const records: ApprovalRecord[] = await db.getAllFromIndex('approvals', 'by-account', account.id);
+  const scopeNames = await loadDirectoryScopeNames(db, account.tenantId, records.map(r => r.directoryScopeId));
   return records.map(r => ({
     id: r.id,
     roleName: r.roleName,
@@ -219,18 +235,21 @@ export async function loadApprovals(accountId: string): Promise<ApprovalItem[]> 
     durationRequested: r.durationRequested,
     requestedAt: new Date(r.requestedAt),
     directoryScopeId: r.directoryScopeId,
+    directoryScopeName: r.directoryScopeId ? scopeNames.get(r.directoryScopeId) : undefined,
   }));
 }
 
 /** Loads the user's own pending activation requests. */
-export async function loadPendingRequests(accountId: string): Promise<PendingRequest[]> {
+export async function loadPendingRequests(account: AccountRecord): Promise<PendingRequest[]> {
   const db = await getDB();
-  const records: PendingRequestRecord[] = await db.getAllFromIndex('pending_requests', 'by-account', accountId);
+  const records: PendingRequestRecord[] = await db.getAllFromIndex('pending_requests', 'by-account', account.id);
+  const scopeNames = await loadDirectoryScopeNames(db, account.tenantId, records.map(r => r.directoryScopeId));
   return records.map(r => ({
     id: r.id,
     kind: r.kind,
     roleName: r.roleName,
     directoryScopeId: r.directoryScopeId,
+    directoryScopeName: r.directoryScopeId ? scopeNames.get(r.directoryScopeId) : undefined,
   }));
 }
 
@@ -481,9 +500,9 @@ const SCOPE_TYPE_LABELS: Record<AzureScopeRecord['scopeType'], string> = {
   resource: 'Res',
 };
 
-/** Appends the Entra directory scope label (e.g. ` @ Admin unit: {id}`) to a role label for any non-root scope. */
-function withScope(label: string, directoryScopeId: string | undefined): string {
-  const scope = formatDirectoryScopeLabel(directoryScopeId);
+/** Appends the Entra directory scope label (e.g. ` @ Admin unit: Sales`) to a role label for any non-root scope. */
+function withScope(label: string, directoryScopeId: string | undefined, directoryScopeName: string | undefined): string {
+  const scope = formatDirectoryScopeLabel(directoryScopeId, directoryScopeName);
   return scope ? `${label} @ ${scope}` : label;
 }
 
@@ -551,6 +570,7 @@ export async function loadEntitlementTree(): Promise<AccountEntitlements[]> {
       db.getAllFromIndex('azure_scopes', 'by-account', account.id).then(all => all.filter(s => s.parentScopeId === null)),
     ]);
     const liveActs = activations.filter(a => a.expiresAt === 0 || a.expiresAt > now);
+    const scopeNames = await loadDirectoryScopeNames(db, account.tenantId, [...roles.map(r => r.directoryScopeId), ...liveActs.map(a => a.directoryScopeId)]);
 
     // Entra roles: eligible plus role-kind activations.
     const roleNodes: EntitlementNode[] = await Promise.all(roles.map(async r => {
@@ -561,7 +581,7 @@ export async function loadEntitlementTree(): Promise<AccountEntitlements[]> {
       const p = policyDetail(policy);
       const act = liveActs.find(a => a.kind !== 'group' && a.roleDefinitionId === r.roleDefinitionId && (a.directoryScopeId ?? '/') === r.directoryScopeId);
       return {
-        label: withScope(def?.displayName ?? r.roleDefinitionId, r.directoryScopeId),
+        label: withScope(def?.displayName ?? r.roleDefinitionId, r.directoryScopeId, scopeNames.get(r.directoryScopeId)),
         detail: act ? `${activeUntil(act.expiresAt, act.isPermanent)} \u00b7 ${p.detail}` : p.detail,
         status: act ? 'active' as const : p.status,
       };
@@ -570,7 +590,7 @@ export async function loadEntitlementTree(): Promise<AccountEntitlements[]> {
     for (const act of liveActs) {
       if (act.kind !== 'group' && act.roleDefinitionId && !eligibleKeys.has(`${act.roleDefinitionId}::${act.directoryScopeId ?? '/'}`)) {
         const def = await db.get('role_definitions', act.roleDefinitionId);
-        roleNodes.push({ label: withScope(def?.displayName ?? act.roleDefinitionId, act.directoryScopeId), detail: activeUntil(act.expiresAt, act.isPermanent), status: 'active' });
+        roleNodes.push({ label: withScope(def?.displayName ?? act.roleDefinitionId, act.directoryScopeId, act.directoryScopeId ? scopeNames.get(act.directoryScopeId) : undefined), detail: activeUntil(act.expiresAt, act.isPermanent), status: 'active' });
       }
     }
 

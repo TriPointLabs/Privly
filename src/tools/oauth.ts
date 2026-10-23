@@ -368,6 +368,9 @@ export function getClientId(cloud: CloudType): string {
   return id;
 }
 
+/** Optional Graph scope that resolves admin unit names for AU-scoped roles; requires admin consent. */
+export const AU_SCOPE = 'AdministrativeUnit.Read.All';
+
 /**
  * Returns the OAuth2 scopes to request for the given cloud type.
  *
@@ -375,9 +378,10 @@ export function getClientId(cloud: CloudType): string {
  * host prefix; global and GCC use unqualified scope names because the token
  * endpoint infers the resource from the scope string.
  * @param cloud - The cloud environment to get scopes for.
+ * @param [options.includeOptional] - Also request optional scopes (AU_SCOPE). Only first sign-in and GRANT_AU_SCOPE do this.
  * @returns Array of OAuth2 scope strings ready to pass to the authorization endpoint.
  */
-export function getScopes(cloud: CloudType): string[] {
+export function getScopes(cloud: CloudType, { includeOptional = false }: { includeOptional?: boolean } = {}): string[] {
   const base = ['openid', 'profile', 'offline_access'];
   const graphScopes = [
     'User.Read',
@@ -390,6 +394,7 @@ export function getScopes(cloud: CloudType): string[] {
     'PrivilegedEligibilitySchedule.Read.AzureADGroup',
     'PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup',
     'RoleManagementPolicy.Read.AzureADGroup',
+    ...(includeOptional ? [AU_SCOPE] : []),
   ];
   if (cloud === 'gcch') {
     return [...base, ...graphScopes.map(s => `https://graph.microsoft.us/${s}`)];
@@ -413,7 +418,7 @@ export function getArmHost(cloud: CloudType): string {
 
 /**
  * Returns the OAuth2 scope to request for the Azure Management API.
- * ARM only requires `user_impersonation` — no OIDC base scopes are included.
+ * ARM only requires `user_impersonation` -- no OIDC base scopes are included.
  * @param cloud - The cloud environment.
  * @returns Array containing the single ARM scope string.
  */

@@ -15,7 +15,7 @@ import {
   type ActivatingRecord,
 } from '../tools/db.ts';
 import { notify } from '../tools/notify.ts';
-import { isValidEmail } from '../tools/oauth.ts';
+import { isValidEmail, getScopes } from '../tools/oauth.ts';
 import { sendNotification, type CommandAck, type CommandMessage } from '../types/messages.ts';
 import {
   fetchAccountPhoto,
@@ -23,6 +23,8 @@ import {
   refreshArmToken,
   performSignIn,
   acquireTokenInteractive,
+  scopesFromToken,
+  isConsentError,
 } from './auth.ts';
 import {
   runSyncCycle,
@@ -166,7 +168,7 @@ async function handleActivate(kind: 'role' | 'group', params: ActivateParams): P
   if (activeToken !== account.accessToken) {
     const stepUpDb = await getDB();
     const current = await stepUpDb.get('accounts', accountId);
-    if (current) await stepUpDb.put('accounts', { ...current, accessToken: activeToken });
+    if (current) await stepUpDb.put('accounts', { ...current, accessToken: activeToken, grantedScopes: scopesFromToken(activeToken) });
   }
 
   const resBody = await res.json() as { id?: string; status?: string };
@@ -420,8 +422,10 @@ async function handleSignInNew(payload: CommandPayload<'SIGN_IN_NEW'>): Promise<
       graphHost: discovery.graphHost,
       tokenEndpoint: discovery.tokenEndpoint,
       accessToken: tokens.accessToken,
+      grantedScopes: scopesFromToken(tokens.accessToken),
       refreshToken: tokens.refreshToken,
       tokenExpiresAt: tokens.tokenExpiresAt,
+      auScopePromptDismissed: existing?.auScopePromptDismissed,
       // Preserve the user's preference on re-sign-in; default false for new accounts.
       showPermanentAssignments: existing?.showPermanentAssignments ?? false,
       // ARM token fields -- populated shortly after sign-in via refreshArmToken.
@@ -482,6 +486,51 @@ async function handleSignInInteractive(payload: CommandPayload<'SIGN_IN_INTERACT
   }
 }
 
+/** GRANT_AU_SCOPE -- interactively request the optional AU scope, then resync so admin unit names resolve. */
+/** Re-read the account and persist (or clear) the last AU scope grant error. */
+async function setAuScopeGrantError(accountId: string, auScopeGrantError: string | undefined): Promise<void> {
+  const db = await getDB();
+  const fresh = await db.get('accounts', accountId);
+  if (!fresh) return;
+  await db.put('accounts', { ...fresh, auScopeGrantError });
+  notifyDbChanged('accounts');
+}
+
+async function handleGrantAuScope(payload: CommandPayload<'GRANT_AU_SCOPE'>): Promise<CommandAck> {
+  const { accountId } = payload;
+  const db = await getDB();
+  const account = await db.get('accounts', accountId);
+  if (!account) return { ok: false, error: 'Account not found' };
+  // The consent window closes the popup, so the ack may never be read; the outcome is persisted on the account instead.
+  await setAuScopeGrantError(accountId, undefined);
+  try {
+    await acquireTokenInteractive(account, undefined, getScopes(account.cloud, { includeOptional: true }), 'graph');
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    log('warn', 'account', `AU scope grant failed for ${maskUpn(account.userPrincipalName)}: ${message}`);
+    const error = isConsentError(e)
+      ? 'An administrator must approve this permission. Share the admin consent link from the sign-in page with them.'
+      : message;
+    await setAuScopeGrantError(accountId, error);
+    return { ok: false, error };
+  }
+  const freshDb = await getDB();
+  const fresh = await freshDb.get('accounts', accountId);
+  if (!fresh) return { ok: false, error: 'Account not found' };
+  // Clicking Enable (banner or Settings) brings the banner back into play if it was dismissed earlier.
+  const updated = { ...fresh, auScopePromptDismissed: false, auScopeGrantError: undefined };
+  await freshDb.put('accounts', updated);
+  notifyDbChanged('accounts');
+  // The grant itself succeeded; a sync failure only delays the names until the next cycle.
+  try {
+    await syncRoleAssignments(updated, { force: true });
+    await syncActiveAssignments(updated);
+  } catch (e) {
+    log('warn', 'sync', `Resync after AU scope grant failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  return { ok: true };
+}
+
 /** SIGN_OUT -- delete the account and all associated FK records. */
 async function handleSignOut(payload: CommandPayload<'SIGN_OUT'>): Promise<CommandAck> {
   const { accountId } = payload;
@@ -490,12 +539,12 @@ async function handleSignOut(payload: CommandPayload<'SIGN_OUT'>): Promise<Comma
   const tenantId = account?.tenantId;
 
   // Delete account and all associated FK records in a single transaction.
-  // Tenant-scoped stores (role_definitions, role_policies, group_policies) are only
+  // Tenant-scoped stores (role_definitions, role_policies, group_policies, directory_scopes) are only
   // cleaned when no other accounts remain in the same tenant.
   const tx = db.transaction(
     ['accounts', 'roles', 'groups', 'activations', 'approvals',
      'pending_requests', 'activating', 'states',
-     'role_definitions', 'role_policies', 'group_policies',
+     'role_definitions', 'role_policies', 'group_policies', 'directory_scopes',
      'azure_scopes', 'azure_roles', 'azure_activations', 'azure_policies',
      'justification_prefills'],
     'readwrite'
@@ -529,13 +578,14 @@ async function handleSignOut(payload: CommandPayload<'SIGN_OUT'>): Promise<Comma
   const stateKeys = allStates.filter(s => s.accountId === accountId).map(s => s.id);
 
   // Tenant-scoped keys: only fetched when this is the last account in the tenant.
-  const [rolePolicyKeys, groupPolicyKeys, customRoleDefKeys] = isLastInTenant && tenantId
+  const [rolePolicyKeys, groupPolicyKeys, customRoleDefKeys, directoryScopeKeys] = isLastInTenant && tenantId
     ? await Promise.all([
         tx.objectStore('role_policies').index('by-tenant').getAllKeys(tenantId),
         tx.objectStore('group_policies').index('by-tenant').getAllKeys(tenantId),
         tx.objectStore('role_definitions').index('by-tenant').getAllKeys(tenantId),
+        tx.objectStore('directory_scopes').index('by-tenant').getAllKeys(tenantId),
       ])
-    : [[], [], []];
+    : [[], [], [], []];
 
   await Promise.all([
     ...roleKeys.map(k => tx.objectStore('roles').delete(k)),
@@ -553,6 +603,7 @@ async function handleSignOut(payload: CommandPayload<'SIGN_OUT'>): Promise<Comma
     ...rolePolicyKeys.map(k => tx.objectStore('role_policies').delete(k)),
     ...groupPolicyKeys.map(k => tx.objectStore('group_policies').delete(k)),
     ...customRoleDefKeys.map(k => tx.objectStore('role_definitions').delete(k)),
+    ...directoryScopeKeys.map(k => tx.objectStore('directory_scopes').delete(k)),
     tx.objectStore('accounts').delete(accountId),
   ]);
   await tx.done;
@@ -682,6 +733,7 @@ const commandHandlers: {
 } = {
   SIGN_IN_NEW: handleSignInNew,
   SIGN_IN_INTERACTIVE: handleSignInInteractive,
+  GRANT_AU_SCOPE: handleGrantAuScope,
   SIGN_OUT: handleSignOut,
   TEST_NOTIFICATION: handleTestNotification,
   UPDATE_ACCOUNT_SETTING: handleUpdateAccountSetting,

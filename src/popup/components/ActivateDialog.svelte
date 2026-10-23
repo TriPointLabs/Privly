@@ -113,7 +113,7 @@
   );
 
   const directoryScopeLabel = $derived(
-    target?.kind === 'role' ? formatDirectoryScopeLabel(target.data.directoryScopeId) : undefined
+    target?.kind === 'role' ? formatDirectoryScopeLabel(target.data.directoryScopeId, target.data.directoryScopeName) : undefined
   );
 
   const policy = $derived(target?.data.policyRules);

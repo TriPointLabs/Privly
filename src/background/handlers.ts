@@ -478,12 +478,25 @@ async function handleSignInInteractive(payload: CommandPayload<'SIGN_IN_INTERACT
   if (!account) return { ok: false, error: 'Account not found' };
   try {
     await acquireTokenInteractive(account);
-    return { ok: true };
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);
     log('error', 'account', `Interactive re-auth failed for ${maskUpn(account.userPrincipalName)}: ${error}`);
     return { ok: false, error };
   }
+  try {
+    await refreshArmToken(accountId, db, { fatal: false });
+    const fresh = await db.get('accounts', accountId);
+    if (fresh?.accessToken) {
+      await setSyncRunning(true);
+      // Fire-and-forget: the auth window closed the popup, so lists must refill without waiting on the ack.
+      syncEligibleAssignments(fresh, { force: true })
+        .catch(err => log('warn', 'sync', `Post re-auth PIM sync failed: ${err instanceof Error ? err.message : String(err)}`))
+        .finally(() => { void setSyncRunning(false); });
+    }
+  } catch (e) {
+    log('warn', 'sync', `Post re-auth resync failed for ${maskUpn(account.userPrincipalName)}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  return { ok: true };
 }
 
 /** GRANT_AU_SCOPE -- interactively request the optional AU scope, then resync so admin unit names resolve. */

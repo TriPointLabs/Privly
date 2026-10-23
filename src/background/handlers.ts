@@ -115,7 +115,7 @@ async function handleActivate(kind: 'role' | 'group', params: ActivateParams): P
     policyKey = `${account.tenantId}::${roleRecord.roleDefinitionId}`;
     policyStoreName = 'role_policies';
     expectActivation = { kind: 'role', roleDefinitionId: roleRecord.roleDefinitionId };
-    refreshStalePolicy = () => refreshSingleRolePolicy(account, roleRecord.roleDefinitionId, roleRecord.directoryScopeId);
+    refreshStalePolicy = () => refreshSingleRolePolicy(account, roleRecord.roleDefinitionId);
   } else {
     const groupRecord = await db.get('groups', entityId);
     if (!groupRecord) return { ok: false, error: 'Group record not found' };

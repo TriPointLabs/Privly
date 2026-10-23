@@ -18,6 +18,7 @@ import {
   type RoleRecord,
   type RoleDefinitionRecord,
   type RolePolicyRecord,
+  type DirectoryScopeRecord,
   type ActivationRecord,
   type GroupRecord,
   type GroupPolicyRecord,
@@ -29,7 +30,7 @@ import {
   type AzurePolicyRecord,
   SYNC_STATE_ID,
 } from '../tools/db.ts';
-import { getArmHost } from '../tools/oauth.ts';
+import { getArmHost, AU_SCOPE } from '../tools/oauth.ts';
 import { notify } from '../tools/notify.ts';
 import { normalizeMemberType } from '../tools/membership.ts';
 import type { PolicyRules } from '../types/pim.ts';
@@ -39,13 +40,14 @@ import {
   fetchAllPages,
   parsePolicyRules,
   notifyDbChanged,
+  graphErrorCode,
   ACTIVATING_STALE_TTL_MS,
   type RawPolicyRule,
 } from './utils.ts';
 import { reconcilePendingApprovalAlarm, updateBadge } from './badge.ts';
 import { refreshAccountTokens, refreshArmToken, fetchTenantInfo } from './auth.ts';
 import { sendNotification } from '../types/messages.ts';
-import { log, maskUpn } from './log.ts';
+import { log, maskUpn, shortId } from './log.ts';
 import { checkExpiries } from './expiry.ts';
 
 /**
@@ -108,7 +110,7 @@ async function fetchPolicyRulesForPairs<K>(opts: {
   await withConcurrency(pairs, 5, async (pair) => {
     const res = await fetchAllPages<{ policyId?: string; properties?: { policyId?: string } }>(assignmentUrl(pair), { headers });
     if (!res.ok) {
-      log('warn', 'sync', `${logPrefix}: policy assignment fetch failed for ${label(pair)}: HTTP ${res.status} ${res.body}`);
+      log('warn', 'sync', `${logPrefix}: policy assignment fetch failed for ${label(pair)}: HTTP ${res.status} ${graphErrorCode(res.body)}`);
       return;
     }
     const policyId = res.items[0] ? policyIdOf(res.items[0]) : undefined;
@@ -159,23 +161,18 @@ function graphPolicyRulesFetcher(graphHost: string, headers: Record<string, stri
  * the same as the roleDefinitionId; for custom roles it is the canonical ID
  * returned by `GET /roleManagement/directory/roleDefinitions/{id}`.
  *
- * `scopeMap` maps each roleDefinitionId to its `directoryScopeId` from the
- * eligibility schedule. For tenant-wide roles this is always `/`, but for
- * RMAU-scoped roles it is the administrative unit resource path. Using the
- * actual scope is required for RMAU policy lookups to return results.
+ * The filter always uses `scopeId eq '/'`: Graph only supports the tenant root scope for DirectoryRole policy assignments, and eligibilities scoped to an administrative unit are governed by the same tenant-wide role settings.
  *
  * @param account - Authenticated account for Graph requests.
  * @param roleDefinitionIds - IDs of roles whose policies should be fetched.
  * @param roleNames - Map from roleDefinitionId to display name, used for logging.
  * @param policyQueryIds - Map from roleDefinitionId to the ID to use in the policy filter.
- * @param scopeMap - Map from roleDefinitionId to directoryScopeId.
  */
 async function syncPolicyRules(
   account: AccountRecord,
   roleDefinitionIds: string[],
   roleNames: Map<string, string>,
   policyQueryIds: Map<string, string>,
-  scopeMap: Map<string, string>,
   { force = false }: { force?: boolean } = {},
 ): Promise<void> {
   if (roleDefinitionIds.length === 0) return;
@@ -195,7 +192,7 @@ async function syncPolicyRules(
 
   // scopeType eq 'DirectoryRole' is required -- omitting it causes a MissingProvider 400.
   // The roleDefinitionId value in the filter must be the canonical ID from policyQueryIds.
-  // scopeId comes from the eligibility schedule's directoryScopeId (not hardcoded to '/').
+  // scopeId is always '/': AU-scoped eligibilities share the tenant-wide policy.
   log('info', 'sync', `Fetching ${roleDefinitionIds.length} policy assignment(s) for ${maskUpn(account.userPrincipalName)}`);
   const headers = { Authorization: `Bearer ${account.accessToken!}` };
   const rulesByRole = await fetchPolicyRulesForPairs({
@@ -204,9 +201,8 @@ async function syncPolicyRules(
     label: (id) => `"${roleNames.get(id) ?? id}"`,
     assignmentUrl: (id) => {
       const queryId = policyQueryIds.get(id) ?? id;
-      const scopeId = scopeMap.get(id) ?? '/';
       return `${account.graphHost}/v1.0/policies/roleManagementPolicyAssignments` +
-        `?$filter=scopeId eq '${scopeId}' and scopeType eq 'DirectoryRole' and roleDefinitionId eq '${queryId}'` +
+        `?$filter=scopeId eq '/' and scopeType eq 'DirectoryRole' and roleDefinitionId eq '${queryId}'` +
         `&$select=id,policyId,roleDefinitionId`;
     },
     policyIdOf: item => item.policyId,
@@ -233,6 +229,74 @@ async function syncPolicyRules(
 }
 
 /**
+ * Resolves administrative unit display names for AU-scoped role directoryScopeIds and caches
+ * them in `directory_scopes`. Runs only when the account's token carries AU_SCOPE; otherwise
+ * labels fall back to the raw ID. Per-id fetch failures are logged and skipped. Records fresher
+ * than POLICY_TTL_MS are skipped unless `force`.
+ */
+async function resolveDirectoryScopeNames(
+  account: AccountRecord,
+  directoryScopeIds: string[],
+  { force = false }: { force?: boolean } = {},
+): Promise<void> {
+  if (!account.accessToken || !account.graphHost) return;
+  if (!account.grantedScopes?.includes(AU_SCOPE)) return;
+
+  const auIds = new Map<string, string>();
+  for (const scopeId of directoryScopeIds) {
+    const match = /^\/administrativeUnits\/([^/]+)$/i.exec(scopeId ?? '');
+    if (match) auIds.set(scopeId, match[1]);
+  }
+  let pending = [...auIds.keys()];
+  if (pending.length === 0) return;
+
+  if (!force) {
+    const cacheDb = await getDB();
+    const cutoff = Date.now() - POLICY_TTL_MS;
+    const cached = await Promise.all(pending.map(id => cacheDb.get('directory_scopes', `${account.tenantId}::${id}`)));
+    pending = pending.filter((_, i) => (cached[i]?.lastSyncedAt ?? 0) < cutoff);
+    if (pending.length === 0) return;
+  }
+
+  const headers = { Authorization: `Bearer ${account.accessToken}` };
+  const records: DirectoryScopeRecord[] = [];
+  await withConcurrency(pending, 5, async (directoryScopeId) => {
+    const auId = auIds.get(directoryScopeId)!;
+    const res = await fetchWithRetry(
+      `${account.graphHost}/v1.0/directory/administrativeUnits/${auId}?$select=id,displayName`,
+      { headers },
+    );
+    if (!res.ok) {
+      log('warn', 'sync', `Admin unit name fetch failed for ${shortId(auId)}: HTTP ${res.status}`);
+      return;
+    }
+    const au = await res.json() as { displayName?: string };
+    if (!au.displayName) return;
+    records.push({
+      id: `${account.tenantId}::${directoryScopeId}`,
+      tenantId: account.tenantId,
+      directoryScopeId,
+      displayName: au.displayName,
+      lastSyncedAt: Date.now(),
+    });
+  });
+  if (records.length === 0) return;
+
+  const db = await getDB();
+  const tx = db.transaction('directory_scopes', 'readwrite');
+  await Promise.all(records.map(r => tx.store.put(r)));
+  await tx.done;
+
+  log('info', 'sync', `Cached ${records.length} admin unit name(s) for ${maskUpn(account.userPrincipalName)}`);
+  notifyDbChanged('directory_scopes');
+}
+
+/** Logs instead of throwing so a name-resolution failure never fails the parent sync. */
+function logDirectoryScopeError(err: unknown): void {
+  log('warn', 'sync', `Admin unit name resolution failed: ${err instanceof Error ? err.message : String(err)}`);
+}
+
+/**
  * Fetches PIM approval requests where the current user is an approver (both role
  * and group kinds). Replaces all existing approval records for this account in
  * the `approvals` store.
@@ -251,7 +315,7 @@ export async function syncPendingApprovals(account: AccountRecord): Promise<void
   const roleUrl =
     `${account.graphHost}/v1.0/roleManagement/directory/roleAssignmentScheduleRequests/filterByCurrentUser(on='approver')` +
     `?$filter=status eq 'PendingApproval'` +
-    `&$select=id,principalId,roleDefinitionId,status,justification,createdDateTime,scheduleInfo,approvalId,createdBy`;
+    `&$select=id,principalId,roleDefinitionId,directoryScopeId,status,justification,createdDateTime,scheduleInfo,approvalId,createdBy`;
 
   const groupUrl =
     `${account.graphHost}/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleRequests/filterByCurrentUser(on='approver')` +
@@ -271,6 +335,7 @@ export async function syncPendingApprovals(account: AccountRecord): Promise<void
     scheduleInfo?: { expiration?: { duration?: string } };
     approvalId?: string;
     createdBy?: { user?: { id: string; displayName?: string } };
+    directoryScopeId?: string;
   };
 
   const [roleRes, groupRes] = await Promise.all([
@@ -300,6 +365,7 @@ export async function syncPendingApprovals(account: AccountRecord): Promise<void
       kind: 'role',
       roleDefinitionId: item.roleDefinitionId,
       roleName: roleDefMap.get(item.roleDefinitionId) ?? item.roleDefinitionId,
+      directoryScopeId: item.directoryScopeId,
       requestorId: item.principalId,
       requestorName: item.createdBy?.user?.displayName ?? item.principalId,
       requestorJustification: item.justification ?? '',
@@ -331,6 +397,8 @@ export async function syncPendingApprovals(account: AccountRecord): Promise<void
   log('info', 'sync', `Stored ${newApprovals.length} pending approval(s) for ${maskUpn(account.userPrincipalName)}`);
   notifyDbChanged('approvals');
 
+  await resolveDirectoryScopeNames(account, roleItems.map(r => r.directoryScopeId!).filter(Boolean)).catch(logDirectoryScopeError);
+
   if (newApprovals.length > 0) {
     await notify(
       'Approval required',
@@ -358,7 +426,7 @@ export async function syncMyPendingRequests(account: AccountRecord): Promise<voi
   const roleUrl =
     `${account.graphHost}/v1.0/roleManagement/directory/roleAssignmentScheduleRequests/filterByCurrentUser(on='principal')` +
     `?$filter=status eq 'PendingApproval'` +
-    `&$select=id,principalId,roleDefinitionId,status,justification,createdDateTime,scheduleInfo`;
+    `&$select=id,principalId,roleDefinitionId,directoryScopeId,status,justification,createdDateTime,scheduleInfo`;
 
   const groupUrl =
     `${account.graphHost}/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleRequests/filterByCurrentUser(on='principal')` +
@@ -374,6 +442,7 @@ export async function syncMyPendingRequests(account: AccountRecord): Promise<voi
     groupId?: string;
     accessId?: 'member' | 'owner';
     createdDateTime: string;
+    directoryScopeId?: string;
   };
 
   const [roleRes, groupRes] = await Promise.all([
@@ -407,6 +476,7 @@ export async function syncMyPendingRequests(account: AccountRecord): Promise<voi
       kind: 'role' as const,
       roleDefinitionId: item.roleDefinitionId,
       roleName: (item.roleDefinitionId ? roleDefMap.get(item.roleDefinitionId) : undefined) ?? item.roleDefinitionId ?? item.id,
+      directoryScopeId: item.directoryScopeId,
       requestedAt: new Date(item.createdDateTime).getTime(),
     })),
     ...groupItems.map(item => ({
@@ -425,6 +495,7 @@ export async function syncMyPendingRequests(account: AccountRecord): Promise<voi
 
   log('info', 'sync', `Stored ${newRequests.length} pending request(s) for ${maskUpn(account.userPrincipalName)}`);
   notifyDbChanged('pending_requests');
+  await resolveDirectoryScopeNames(account, roleItems.map(r => r.directoryScopeId!).filter(Boolean)).catch(logDirectoryScopeError);
   await reconcilePendingApprovalAlarm();
 }
 
@@ -490,8 +561,7 @@ export async function syncRoleAssignments(account: AccountRecord, { force = fals
   });
 
   if (!res.ok) {
-    log('warn', 'sync', `eligibleRoleAssignments failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status}`);
-    log('warn', 'sync', `  Response body: ${res.body}`);
+    log('warn', 'sync', `eligibleRoleAssignments failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${graphErrorCode(res.body)}`);
     return;
   }
 
@@ -559,10 +629,9 @@ export async function syncRoleAssignments(account: AccountRecord, { force = fals
     });
   }
 
-  // directoryScopeId is used in place of the hardcoded '/' for RMAU-scoped roles.
-  const scopeMap = new Map(items.map(item => [item.roleDefinitionId, item.directoryScopeId]));
   const roleNamesMap = new Map(roleDefs.map(d => [d.id, d.displayName]));
-  await syncPolicyRules(account, roleDefinitionIds, roleNamesMap, policyQueryIds, scopeMap, { force });
+  await syncPolicyRules(account, roleDefinitionIds, roleNamesMap, policyQueryIds, { force });
+  await resolveDirectoryScopeNames(account, items.map(i => i.directoryScopeId), { force }).catch(logDirectoryScopeError);
 }
 
 /**
@@ -596,7 +665,7 @@ export async function syncActiveAssignments(account: AccountRecord): Promise<voi
     headers: { Authorization: `Bearer ${account.accessToken}` },
   });
   if (!res.ok) {
-    log('warn', 'sync', `roleAssignmentSchedules failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${res.body}`);
+    log('warn', 'sync', `roleAssignmentSchedules failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${graphErrorCode(res.body)}`);
     return;
   }
 
@@ -663,6 +732,7 @@ export async function syncActiveAssignments(account: AccountRecord): Promise<voi
 
   log('info', 'sync', `Wrote ${newActivations.length} active assignment(s) for ${maskUpn(account.userPrincipalName)}`);
   notifyDbChanged('activations');
+  await resolveDirectoryScopeNames(account, items.map(i => i.directoryScopeId)).catch(logDirectoryScopeError);
 }
 
 /**
@@ -694,8 +764,7 @@ export async function syncGroupAssignments(account: AccountRecord, { force = fal
   log('info', 'sync', `Fetching eligible group assignments for ${maskUpn(account.userPrincipalName)}`);
   const res = await fetchAllPages<GroupEligibilityItem>(url, { headers: { Authorization: `Bearer ${account.accessToken}` } });
   if (!res.ok) {
-    log('warn', 'sync', `Group eligibility schedules failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status}`);
-    log('warn', 'sync', `  Response: ${res.body}`);
+    log('warn', 'sync', `Group eligibility schedules failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${graphErrorCode(res.body)}`);
     return;
   }
 
@@ -794,7 +863,7 @@ export async function syncActiveGroupAssignments(account: AccountRecord): Promis
   log('info', 'sync', `Fetching active group assignments for ${maskUpn(account.userPrincipalName)}`);
   const res = await fetchAllPages<ActiveGroupScheduleItem>(url, { headers: { Authorization: `Bearer ${account.accessToken}` } });
   if (!res.ok) {
-    log('warn', 'sync', `Active group assignment schedules failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${res.body}`);
+    log('warn', 'sync', `Active group assignment schedules failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${graphErrorCode(res.body)}`);
     return;
   }
 
@@ -978,7 +1047,7 @@ export async function syncAzureEligibleAssignments(account: AccountRecord, { for
   ]);
 
   if (!res.ok) {
-    log('warn', 'sync', `Azure: roleEligibilityScheduleInstances failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${res.body}`);
+    log('warn', 'sync', `Azure: roleEligibilityScheduleInstances failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${graphErrorCode(res.body)}`);
     return;
   }
 
@@ -1127,7 +1196,7 @@ async function syncAzurePolicyRules(account: AccountRecord, { force = false }: {
       const res = await fetchWithRetry(`${armHost}${policyId}?api-version=2020-10-01`, { headers: armHeaders });
       if (!res.ok) {
         const body = await res.text().catch(() => '(unreadable)');
-        log('warn', 'sync', `Azure: policy rules fetch failed for ${policyId}: HTTP ${res.status} ${body}`);
+        log('warn', 'sync', `Azure: policy rules fetch failed for ${policyId}: HTTP ${res.status} ${graphErrorCode(body)}`);
         return null;
       }
       const json = await res.json() as { properties?: { rules?: RawPolicyRule[] } };
@@ -1189,7 +1258,7 @@ export async function syncAzureActiveAssignments(account: AccountRecord): Promis
   log('info', 'sync', `Azure: fetching active assignments for ${maskUpn(account.userPrincipalName)}`);
   const res = await fetchAllPages<RawScheduleInstance>(url, { headers: { Authorization: `Bearer ${armToken}` } });
   if (!res.ok) {
-    log('warn', 'sync', `Azure: roleAssignmentScheduleInstances failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${res.body}`);
+    log('warn', 'sync', `Azure: roleAssignmentScheduleInstances failed for ${maskUpn(account.userPrincipalName)}: HTTP ${res.status} ${graphErrorCode(res.body)}`);
     return;
   }
 
@@ -1349,13 +1418,12 @@ export async function runSyncCycle(force = false): Promise<void> {
  * Force-refetches one Entra role policy after an activation validation failure
  * suggested the cache is stale. Fire-and-forget from the activation path.
  */
-export async function refreshSingleRolePolicy(account: AccountRecord, roleDefinitionId: string, directoryScopeId: string): Promise<void> {
+export async function refreshSingleRolePolicy(account: AccountRecord, roleDefinitionId: string): Promise<void> {
   await syncPolicyRules(
     account,
     [roleDefinitionId],
     new Map([[roleDefinitionId, roleDefinitionId]]),
     new Map([[roleDefinitionId, roleDefinitionId]]),
-    new Map([[roleDefinitionId, directoryScopeId]]),
     { force: true },
   );
 }

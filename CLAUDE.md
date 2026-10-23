@@ -45,6 +45,8 @@ There is no lint script; typecheck + build are the gates after every change.
 - Service worker registers all event listeners at top level (MV3 requirement)
 - Never use `console.*` in `src/` -- use `log()` from `src/background/log.ts` (see Logging)
 - Don't use em dashes anywhere
+- Optional Graph scopes (`AU_SCOPE` via `getScopes(cloud, { includeOptional: true })`) are requested only at first sign-in and by `GRANT_AU_SCOPE`; refresh, silent SSO and step-up flows use base scopes
+- `AccountRecord.grantedScopes` mirrors the Graph token's `scp` claim and gates optional features (e.g. AU name resolution)
 - When producing content, do not split sentences in comments over multiple lines purely for length reasons. It is fine for code but only do this for readability benefits where it makes sense.
 
 ## CRITICAL: State Sharing Architecture
@@ -95,20 +97,22 @@ The `idb` library is used for all IndexedDB access. All schema and query logic l
 - Re-query on `DB_CHANGED` rather than holding data beyond a render cycle; MainPage debounces bursts (~100ms) so each query runs once per burst.
 - Azure detail views use the `by-scope`/`by-subscription` compound indexes rather than scanning `by-account` and filtering.
 
-### Schema overview (v15)
+### Schema overview (v18)
 Key ownership: `accounts.id` is a locally generated UUID (stable per `tenantId + accountId` pair via the unique `by-tenant-account` index). Child stores use server-issued IDs (Graph schedule IDs, approvalId, ARM instance GUIDs) or composite string keys, and reference `accounts.id` through an `accountId` field with a `by-account` index.
 
 ```
-accounts          -- id (local UUID), tenantId, accountId (Entra OID), tokens, ...
+accounts          -- id (local UUID), tenantId, accountId (Entra OID), access/refresh/ARM tokens, ...
 role_definitions  -- id (Graph roleDefinitionId); by-tenant ('' tenantId = shared built-in)
 roles             -- id (Graph eligibility schedule ID); by-account
 role_policies     -- id `${tenantId}::${roleDefinitionId}`; by-tenant; lastSyncedAt (TTL)
 groups            -- id (Graph eligibility schedule ID); by-account
 group_policies    -- id `${tenantId}::${groupId}::${accessId}`; by-tenant; lastSyncedAt (TTL)
+directory_scopes  -- id `${tenantId}::${directoryScopeId}`; by-tenant; admin unit display names; lastSyncedAt (TTL)
 activations       -- id (Graph schedule ID); by-account; kind 'role'|'group'; expiry-notification flags
 approvals         -- id (Graph approvalId); by-account
 pending_requests  -- id (Graph request ID); by-account
 activating        -- id (Graph request ID); by-account; in-flight activation spinner state
+justification_prefills -- id (local UUID); by-account; saved justification texts, LRU-capped
 extension_settings-- single 'global' record (incl. loggingEnabled, logMaxEntries)
 states            -- ephemeral operation state (e.g. sign-in progress)
 azure_scopes      -- id (ARM scope path); by-account, by-subscription, by-parent

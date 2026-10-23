@@ -9,7 +9,7 @@ import { getDB, type AccountRecord } from '../tools/db.ts';
 import { notify } from '../tools/notify.ts';
 import { getArmScopes } from '../tools/oauth.ts';
 import { acquireTokenInteractive, acquireSteppedUpToken, tokenSatisfiesPolicy } from './auth.ts';
-import { parseGraphError } from './utils.ts';
+import { parseGraphError, graphErrorCode } from './utils.ts';
 import {
   syncRoleAssignments,
   syncActiveAssignments,
@@ -154,7 +154,7 @@ export async function executeActivationRequest(opts: {
       }
       if (!isSuccess(res)) {
         const retryBody = await res.text().catch(() => '(unreadable)');
-        log('error', 'activate', `${logLabel} failed after step-up: HTTP ${res.status} ${retryBody}`);
+        log('error', 'activate', `${logLabel} failed after step-up: HTTP ${res.status} ${graphErrorCode(retryBody)}`);
         const errorMsg = parseGraphError(retryBody, defaultError);
         await notify(notifyLabel, errorMsg);
         return { ok: false, error: errorMsg };
@@ -178,7 +178,7 @@ export async function executeActivationRequest(opts: {
     return { ok: false, error: errorMsg };
   }
 
-  log('error', 'activate', `${logLabel} failed: HTTP ${res.status} ${failBody}`);
+  log('error', 'activate', `${logLabel} failed: HTTP ${res.status} ${graphErrorCode(failBody)}`);
   const errorMsg = parseGraphError(failBody, defaultError);
   await notify(notifyLabel, errorMsg);
   return { ok: false, error: errorMsg };
@@ -196,7 +196,7 @@ export async function executeActivationRequest(opts: {
  * the same role can be held at more than one scope.
  */
 export type ExpectedActivation =
-  | { kind: 'role'; roleDefinitionId: string }
+  | { kind: 'role'; roleDefinitionId: string; directoryScopeId: string }
   | { kind: 'group'; groupId: string }
   | { kind: 'azure'; scopeId: string; roleDefinitionId: string };
 
@@ -213,7 +213,7 @@ async function activationIsVisible(accountId: string, expect: ExpectedActivation
   }
   const activations = await db.getAllFromIndex('activations', 'by-account', accountId);
   return expect.kind === 'role'
-    ? activations.some(a => a.kind === 'role' && a.roleDefinitionId === expect.roleDefinitionId)
+    ? activations.some(a => a.kind === 'role' && a.roleDefinitionId === expect.roleDefinitionId && (a.directoryScopeId ?? '/') === expect.directoryScopeId)
     : activations.some(a => a.kind === 'group' && a.groupId === expect.groupId);
 }
 

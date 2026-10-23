@@ -58,6 +58,23 @@ export function parseGraphError(bodyText: string, fallback: string): string {
 }
 
 /**
+ * Extracts only the machine-readable error code from a Graph or ARM JSON error
+ * body, for use at log sites. Full bodies can echo submitted fields such as
+ * justification text and ticket numbers, which must never reach the persisted
+ * log (see Logging in CLAUDE.md); the code alone is safe to store. User-facing
+ * error messages still go through `parseGraphError`.
+ * @param bodyText - Raw response body text from a failed Graph or ARM request.
+ */
+export function graphErrorCode(bodyText: string): string {
+  try {
+    const j = JSON.parse(bodyText);
+    return j.error?.code ?? '(no error code)';
+  } catch {
+    return '(unparseable body)';
+  }
+}
+
+/**
  * Processes items with bounded concurrency. Runs up to `concurrency` items in
  * parallel at a time using `Promise.all`, then waits for the whole batch to
  * settle before starting the next batch.

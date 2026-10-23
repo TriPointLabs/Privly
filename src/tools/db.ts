@@ -37,13 +37,18 @@ export interface AccountRecord {
   tokenEndpoint: string | null;
   accessToken: string | null;
   refreshToken: string | null;
-  idToken: string | null;
   /** Epoch milliseconds when the access token expires. */
   tokenExpiresAt: number | null;
   /** Access token scoped to the Azure Management API. Null until first ARM acquisition. */
   armAccessToken: string | null;
   /** Epoch milliseconds when armAccessToken expires. */
   armTokenExpiresAt: number | null;
+  /** Space-split `scp` claim of the latest Graph access token. Gates optional features (e.g. AU_SCOPE). */
+  grantedScopes?: string[];
+  /** True once the user chose "Not now" on the admin unit permission banner. */
+  auScopePromptDismissed?: boolean;
+  /** User-facing message from the last failed GRANT_AU_SCOPE attempt; cleared when a new attempt starts or succeeds. */
+  auScopeGrantError?: string;
 }
 
 /**
@@ -95,6 +100,21 @@ export interface RolePolicyRecord {
   authContextClassRef: string | null;
   /** Epoch milliseconds when this record was last fetched. Absent on records written before the TTL cache existed (treated as stale). */
   lastSyncedAt?: number;
+}
+
+/**
+ * Cached display name for an Entra directory scope (currently administrative units only).
+ * Keyed as `${tenantId}::${directoryScopeId}`.
+ */
+export interface DirectoryScopeRecord {
+  /** Composite key: `${tenantId}::${directoryScopeId}` */
+  id: string;
+  tenantId: string;
+  /** Directory scope path, e.g. `/administrativeUnits/{id}`. */
+  directoryScopeId: string;
+  displayName: string;
+  /** Epoch milliseconds when this record was last fetched. */
+  lastSyncedAt: number;
 }
 
 /** A PIM-eligible group assignment synced from Graph privilegedAccess/group/eligibilitySchedules. */
@@ -179,6 +199,8 @@ export interface ApprovalRecord {
   kind: 'role' | 'group';
   /** Entra role definition ID. Present when kind === 'role'. */
   roleDefinitionId?: string;
+  /** Directory scope ID of the requested role, e.g. "/" for tenant-wide. Present when kind === 'role'. */
+  directoryScopeId?: string;
   /** Entra group object ID. Present when kind === 'group'. */
   groupId?: string;
   /** Member or owner. Present when kind === 'group'. */
@@ -211,6 +233,8 @@ export interface PendingRequestRecord {
   kind: 'role' | 'group';
   /** Entra role definition ID. Present when kind === 'role'. */
   roleDefinitionId?: string;
+  /** Directory scope ID of the requested role, e.g. "/" for tenant-wide. Present when kind === 'role'. */
+  directoryScopeId?: string;
   /** Entra group object ID. Present when kind === 'group'. */
   groupId?: string;
   /** Member or owner. Present when kind === 'group'. */
@@ -465,6 +489,13 @@ interface PrivlyDB extends DBSchema {
       'by-tenant': string;
     };
   };
+  directory_scopes: {
+    key: string;
+    value: DirectoryScopeRecord;
+    indexes: {
+      'by-tenant': string;
+    };
+  };
   roles: {
     key: string;
     value: RoleRecord;
@@ -603,6 +634,7 @@ let dbPromise: Promise<IDBPDatabase<PrivlyDB>> | null = null;
  * - v14: `AccountRecord` gains `tenantDisplayName` from Graph `/organization` `displayName`
  * - v15: `logs` store added; `extension_settings` gains `loggingEnabled` and `logMaxEntries`
  * - v16: `justification_prefills` store added (saved activation justifications, CS-3)
+ * - v18: `directory_scopes` store added (cached admin unit display names)
  * @returns A typed `IDBPDatabase` handle for the Privly database.
  */
 export function getDB(): Promise<IDBPDatabase<PrivlyDB>> {
@@ -615,7 +647,7 @@ export function getDB(): Promise<IDBPDatabase<PrivlyDB>> {
 }
 
 function openDBConnection(): Promise<IDBPDatabase<PrivlyDB>> {
-  return openDB<PrivlyDB>('privly', 16, {
+  return openDB<PrivlyDB>('privly', 18, {
     blocking() {
       // Another context is upgrading to a newer schema version. Close this
       // connection so the upgrade can proceed; the next getDB() reopens.
@@ -626,7 +658,7 @@ function openDBConnection(): Promise<IDBPDatabase<PrivlyDB>> {
       dbPromise = null;
     },
     async upgrade(db, oldVersion, newVersion, transaction) {
-      lastMigration = { from: oldVersion, to: newVersion ?? 16 };
+      lastMigration = { from: oldVersion, to: newVersion ?? 17 };
       if (oldVersion < 1) {
         const accounts = db.createObjectStore('accounts', { keyPath: 'id' });
         accounts.createIndex('by-tenant-account', ['tenantId', 'accountId'], { unique: true });
@@ -767,6 +799,23 @@ function openDBConnection(): Promise<IDBPDatabase<PrivlyDB>> {
         // and populate the list the first time they tick "Save for next time".
         const prefills = db.createObjectStore('justification_prefills', { keyPath: 'id' });
         prefills.createIndex('by-account', 'accountId');
+      }
+
+      if (oldVersion < 17) {
+        // AccountRecord loses idToken. The stored copy was write-only: its
+        // claims are materialized into account fields at sign-in and nothing
+        // ever read the raw JWT back, so the PII-bearing blob leaves the DB.
+        const accountStore = transaction.objectStore('accounts');
+        const existingAccounts = await accountStore.getAll();
+        for (const account of existingAccounts) {
+          delete (account as { idToken?: string }).idToken;
+          await accountStore.put(account);
+        }
+      }
+
+      if (oldVersion < 18) {
+        const directoryScopes = db.createObjectStore('directory_scopes', { keyPath: 'id' });
+        directoryScopes.createIndex('by-tenant', 'tenantId');
       }
     },
   });

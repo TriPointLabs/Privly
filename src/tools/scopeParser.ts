@@ -89,3 +89,19 @@ export function formatScopeLabel(scope: AzureScope): string {
         : scope.displayName;
   }
 }
+
+/**
+ * Returns a display label for an Entra `directoryScopeId`, or undefined for tenant-wide (`/`) or missing scopes.
+ * @param directoryScopeId - The Graph `directoryScopeId` (e.g. `/administrativeUnits/{id}`).
+ * @param displayName - Resolved scope name from `directory_scopes`; the ID is shown when absent.
+ */
+export function formatDirectoryScopeLabel(directoryScopeId: string | undefined, displayName?: string): string | undefined {
+  if (!directoryScopeId || directoryScopeId === '/') return undefined;
+  const au = directoryScopeId.match(/^\/administrativeUnits\/([^/]+)$/i);
+  if (au) return `Admin unit: ${displayName ?? au[1]}`;
+  const attrSet = directoryScopeId.match(/^\/attributeSets\/([^/]+)$/i);
+  if (attrSet) return `Attribute set: ${attrSet[1]}`;
+  const app = directoryScopeId.match(/^\/([^/]+)$/);
+  if (app) return `App: ${displayName ?? app[1]}`;
+  return directoryScopeId;
+}

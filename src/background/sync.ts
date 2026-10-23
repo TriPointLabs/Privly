@@ -1380,18 +1380,23 @@ export async function runSyncCycle(force = false): Promise<void> {
   await Promise.all(accounts.map(async (account) => {
     log('info', 'sync', `Processing account: ${maskUpn(account.userPrincipalName)} (${account.cloud})`);
     await refreshAccountTokens(account);
-    // Re-read after refresh to get the updated access token before calling Graph.
     const freshDb = await getDB();
+    // Independently check the ARM token on every cycle. refreshAccountTokens only
+    // refreshes ARM when the Graph token itself needed refresh -- if Graph is still valid,
+    // an expiring ARM token would otherwise be missed until the Graph token also expires.
+    // Runs before the re-read so the Azure sync below sees a newly obtained token.
+    try {
+      await refreshArmToken(account.id, freshDb);
+    } catch (e) {
+      log('warn', 'sync', `ARM token check failed for ${maskUpn(account.userPrincipalName)}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    // Re-read after refresh to get the updated access token before calling Graph.
     const fresh = await freshDb.get('accounts', account.id);
     if (fresh?.accessToken) {
       await syncEligibleAssignments(fresh, { force });
     } else {
       log('info', 'sync', `Skipping PIM sync for ${maskUpn(account.userPrincipalName)}: no access token after refresh`);
     }
-    // Independently check the ARM token on every cycle. refreshAccountTokens only
-    // refreshes ARM when the Graph token itself needed refresh -- if Graph is still valid,
-    // an expiring ARM token would otherwise be missed until the Graph token also expires.
-    await refreshArmToken(account.id, freshDb);
 
     // One-time backfill: populate tenantDisplayName for accounts signed in before this field existed.
     // The guard ensures this runs at most once per account and never again after it succeeds.

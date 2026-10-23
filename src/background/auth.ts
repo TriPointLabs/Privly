@@ -24,7 +24,7 @@ import {
   type TokenSet,
 } from '../tools/oauth.ts';
 import { notifyDbChanged } from './utils.ts';
-import { log, maskUpn } from './log.ts';
+import { log, maskUpn, shortId } from './log.ts';
 
 /** Returns the space-split `scp` claim of a Graph access token, or [] if it cannot be decoded. */
 export function scopesFromToken(accessToken: string): string[] {
@@ -101,6 +101,8 @@ export async function fetchTenantInfo(
  * exchanges the resulting code for tokens. Shared by interactive sign-in,
  * interactive step-up, and the silent-SSO refresh fallbacks -- the callers
  * differ only in endpoints, scopes, interactivity, and how tokens are persisted.
+ * `consentScopes` are added to the authorize URL only, so the user consents to
+ * another resource (ARM) up front while the token exchange stays single-resource.
  * @throws On state mismatch (CSRF guard), missing authorization code, or token-endpoint errors.
  */
 async function runAuthCodeFlow(params: {
@@ -108,22 +110,55 @@ async function runAuthCodeFlow(params: {
   tokenEndpoint: string;
   clientId: string;
   scopes: string[];
+  consentScopes?: string[];
   interactive: boolean;
   loginHint?: string;
   claimsJson?: string;
   prompt?: string;
 }): Promise<TokenSet> {
-  const { authorizationEndpoint, tokenEndpoint, clientId, scopes, interactive, loginHint, claimsJson, prompt } = params;
+  const { authorizationEndpoint, tokenEndpoint, clientId, scopes, consentScopes, interactive, loginHint, claimsJson, prompt } = params;
   const { verifier, challenge } = await generatePKCEPair();
   const state = crypto.randomUUID();
   const redirectUri = browser.identity.getRedirectURL();
-  const authUrl = buildAuthUrl({ authorizationEndpoint, clientId, redirectUri, scopes, state, challenge, loginHint, claimsJson, prompt });
+  const authUrl = buildAuthUrl({ authorizationEndpoint, clientId, redirectUri, scopes: [...scopes, ...(consentScopes ?? [])], state, challenge, loginHint, claimsJson, prompt });
   const responseUrl = await browser.identity.launchWebAuthFlow({ url: authUrl, interactive });
   const responseParams = new URL(responseUrl).searchParams;
   if (responseParams.get('state') !== state) throw new Error('State mismatch -- possible CSRF');
   const code = responseParams.get('code');
   if (!code) throw new Error(responseParams.get('error_description') ?? 'No authorization code in response');
   return exchangeCodeForTokens({ tokenEndpoint, clientId, code, redirectUri, verifier, scopes, claimsJson });
+}
+
+/**
+ * Confirms a freshly acquired token set belongs to `account` before it is
+ * persisted over the account's stored tokens.
+ *
+ * Initial sign-in verifies the ID token and creates the record from its
+ * claims, but re-auth flows write into an existing record: `loginHint` is a
+ * hint only, so the user can pick a different account in the Microsoft
+ * account chooser (or hold a different SSO session in the silent flows) and
+ * the wrong identity's tokens would land under this record. The tokens come
+ * straight from the token endpoint over TLS via our own PKCE exchange, so a
+ * claims decode (no signature check) is sufficient to compare identities.
+ *
+ * ARM-scoped flows request no `openid` scope and return no ID token; the ARM
+ * access token is a JWT carrying the same `oid`/`tid` claims, so it is
+ * decoded instead.
+ * @param account - The record the tokens are about to be written to.
+ * @param tokens - The freshly acquired token set (`idToken` absent on ARM flows).
+ * @throws If the token's `oid`/`tid` do not match the account record.
+ */
+function assertTokenMatchesAccount(
+  account: AccountRecord,
+  tokens: { accessToken: string; idToken?: string }
+): void {
+  const claims = decodeJwt(tokens.idToken || tokens.accessToken) as { oid?: string; tid?: string };
+  if (claims.oid !== account.accountId || claims.tid !== account.tenantId) {
+    log('warn', 'auth', `Token identity mismatch for ${maskUpn(account.userPrincipalName)}: expected oid ${shortId(account.accountId)} tid ${shortId(account.tenantId)}, got oid ${shortId(claims.oid)} tid ${shortId(claims.tid)}; tokens discarded`);
+    throw new Error(
+      `Signed-in identity does not match ${maskUpn(account.userPrincipalName)} (account or tenant differs); tokens discarded`
+    );
+  }
 }
 
 /**
@@ -231,6 +266,7 @@ export async function refreshArmToken(
       loginHint: account.userPrincipalName,
       prompt: 'none',
     });
+    assertTokenMatchesAccount(account, { accessToken: armTokens.accessToken });
     const fresh3 = await db.get('accounts', accountId);
     if (!fresh3) return;
     await db.put('accounts', { ...fresh3, armAccessToken: armTokens.accessToken, armTokenExpiresAt: armTokens.tokenExpiresAt });
@@ -287,7 +323,7 @@ export async function refreshAccountTokens(account: AccountRecord): Promise<void
       ...fresh,
       accessToken: tokens.accessToken,
       grantedScopes: scopesFromToken(tokens.accessToken),
-      refreshToken: tokens.refreshToken,
+      refreshToken: tokens.refreshToken ?? fresh.refreshToken,
       tokenExpiresAt: tokens.tokenExpiresAt,
       needsAttention: null,
     });
@@ -316,13 +352,14 @@ export async function refreshAccountTokens(account: AccountRecord): Promise<void
       loginHint: account.userPrincipalName,
       prompt: 'none',
     });
+    assertTokenMatchesAccount(account, tokens);
 
     const fresh2 = await db.get('accounts', account.id) ?? account;
     await db.put('accounts', {
       ...fresh2,
       accessToken: tokens.accessToken,
       grantedScopes: scopesFromToken(tokens.accessToken),
-      refreshToken: tokens.refreshToken,
+      refreshToken: tokens.refreshToken ?? fresh2.refreshToken,
       tokenExpiresAt: tokens.tokenExpiresAt,
       loginHost: discovery.loginHost,
       graphHost: discovery.graphHost,
@@ -366,20 +403,32 @@ export async function performSignIn(
   const discovery = await discoverCloud(tenant);
   const clientId = getClientId(discovery.cloud);
 
-  const signIn = (includeOptional: boolean) => runAuthCodeFlow({
+  const signIn = (includeOptional: boolean, consentArm: boolean) => runAuthCodeFlow({
     authorizationEndpoint: discovery.authorizationEndpoint,
     tokenEndpoint: discovery.tokenEndpoint,
     clientId,
     scopes: getScopes(discovery.cloud, { includeOptional }),
+    consentScopes: consentArm ? getArmScopes(discovery.cloud) : undefined,
     interactive: true,
     loginHint: username,
   });
-  // Optional scopes are asked for once up front; a tenant that has not consented to them must not block sign-in.
-  const tokens = await signIn(true).catch(e => {
-    if (!isConsentError(e)) throw e;
-    log('info', 'auth', 'AU scope not consented; retrying sign-in with base scopes');
-    return signIn(false);
-  });
+  // The optional AU scope and ARM consent are asked for once up front. A tenant that has not consented to them must not
+  // block sign-in, so each consent refusal drops one of them (AU first, since it needs admin consent) and retries.
+  const attempts = [
+    { includeOptional: true, consentArm: true, onRefusal: 'AU scope not consented; retrying sign-in with base scopes and ARM consent' },
+    { includeOptional: false, consentArm: true, onRefusal: 'ARM not consented; retrying sign-in with base scopes only' },
+  ];
+  const tokens = await (async () => {
+    for (const { includeOptional, consentArm, onRefusal } of attempts) {
+      try {
+        return await signIn(includeOptional, consentArm);
+      } catch (e) {
+        if (!isConsentError(e)) throw e;
+        log('info', 'auth', onRefusal);
+      }
+    }
+    return signIn(false, false);
+  })();
 
   const claims = await verifyIdToken(tokens.idToken, discovery, clientId);
   return { discovery, tokens, claims };
@@ -429,18 +478,32 @@ export async function acquireTokenInteractive(
 
   const clientId = getClientId(cloud);
 
-  const tokens = await runAuthCodeFlow({
+  const authorize = (consentScopes?: string[]) => runAuthCodeFlow({
     authorizationEndpoint,
     tokenEndpoint,
     clientId,
     scopes: scopeOverride ?? getScopes(cloud),
+    consentScopes,
     interactive: true,
     loginHint: account.userPrincipalName,
     claimsJson,
   });
+  // Plain re-auth (SIGN_IN_INTERACTIVE) also repairs missing ARM consent; step-ups leave consent alone.
+  // A tenant that blocks ARM consent must not stop re-auth, so a consent refusal retries without it.
+  const tokens = scopeOverride || claimsJson
+    ? await authorize()
+    : await authorize(getArmScopes(cloud)).catch(e => {
+      if (!isConsentError(e)) throw e;
+      log('info', 'auth', 'ARM not consented; retrying re-auth with base scopes only');
+      return authorize();
+    });
+  assertTokenMatchesAccount(account, tokens);
 
   // When ARM scopes are used, store the token as armAccessToken. Otherwise update the
-  // primary Graph token fields. Both paths preserve the refresh token and clear needsAttention.
+  // primary Graph token fields. Both paths clear needsAttention. The token endpoint is
+  // not guaranteed to return a refresh_token (the ARM exchange omits offline_access and
+  // relies on undocumented Entra behavior), so a missing one keeps the stored token
+  // rather than clobbering it with undefined.
   const db = await getDB();
   const freshAccount = await db.get('accounts', account.id) ?? account;
   if (storeAs === 'arm') {
@@ -448,7 +511,7 @@ export async function acquireTokenInteractive(
       ...freshAccount,
       armAccessToken: tokens.accessToken,
       armTokenExpiresAt: tokens.tokenExpiresAt,
-      refreshToken: tokens.refreshToken,
+      refreshToken: tokens.refreshToken ?? freshAccount.refreshToken,
       needsAttention: null,
     });
   } else {
@@ -456,7 +519,7 @@ export async function acquireTokenInteractive(
       ...freshAccount,
       accessToken: tokens.accessToken,
       grantedScopes: scopesFromToken(tokens.accessToken),
-      refreshToken: tokens.refreshToken,
+      refreshToken: tokens.refreshToken ?? freshAccount.refreshToken,
       tokenExpiresAt: tokens.tokenExpiresAt,
       needsAttention: null,
     });

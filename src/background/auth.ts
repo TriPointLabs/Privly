@@ -101,6 +101,8 @@ export async function fetchTenantInfo(
  * exchanges the resulting code for tokens. Shared by interactive sign-in,
  * interactive step-up, and the silent-SSO refresh fallbacks -- the callers
  * differ only in endpoints, scopes, interactivity, and how tokens are persisted.
+ * `consentScopes` are added to the authorize URL only, so the user consents to
+ * another resource (ARM) up front while the token exchange stays single-resource.
  * @throws On state mismatch (CSRF guard), missing authorization code, or token-endpoint errors.
  */
 async function runAuthCodeFlow(params: {
@@ -108,16 +110,17 @@ async function runAuthCodeFlow(params: {
   tokenEndpoint: string;
   clientId: string;
   scopes: string[];
+  consentScopes?: string[];
   interactive: boolean;
   loginHint?: string;
   claimsJson?: string;
   prompt?: string;
 }): Promise<TokenSet> {
-  const { authorizationEndpoint, tokenEndpoint, clientId, scopes, interactive, loginHint, claimsJson, prompt } = params;
+  const { authorizationEndpoint, tokenEndpoint, clientId, scopes, consentScopes, interactive, loginHint, claimsJson, prompt } = params;
   const { verifier, challenge } = await generatePKCEPair();
   const state = crypto.randomUUID();
   const redirectUri = browser.identity.getRedirectURL();
-  const authUrl = buildAuthUrl({ authorizationEndpoint, clientId, redirectUri, scopes, state, challenge, loginHint, claimsJson, prompt });
+  const authUrl = buildAuthUrl({ authorizationEndpoint, clientId, redirectUri, scopes: [...scopes, ...(consentScopes ?? [])], state, challenge, loginHint, claimsJson, prompt });
   const responseUrl = await browser.identity.launchWebAuthFlow({ url: authUrl, interactive });
   const responseParams = new URL(responseUrl).searchParams;
   if (responseParams.get('state') !== state) throw new Error('State mismatch -- possible CSRF');
@@ -366,20 +369,32 @@ export async function performSignIn(
   const discovery = await discoverCloud(tenant);
   const clientId = getClientId(discovery.cloud);
 
-  const signIn = (includeOptional: boolean) => runAuthCodeFlow({
+  const signIn = (includeOptional: boolean, consentArm: boolean) => runAuthCodeFlow({
     authorizationEndpoint: discovery.authorizationEndpoint,
     tokenEndpoint: discovery.tokenEndpoint,
     clientId,
     scopes: getScopes(discovery.cloud, { includeOptional }),
+    consentScopes: consentArm ? getArmScopes(discovery.cloud) : undefined,
     interactive: true,
     loginHint: username,
   });
-  // Optional scopes are asked for once up front; a tenant that has not consented to them must not block sign-in.
-  const tokens = await signIn(true).catch(e => {
-    if (!isConsentError(e)) throw e;
-    log('info', 'auth', 'AU scope not consented; retrying sign-in with base scopes');
-    return signIn(false);
-  });
+  // The optional AU scope and ARM consent are asked for once up front. A tenant that has not consented to them must not
+  // block sign-in, so each consent refusal drops one of them (AU first, since it needs admin consent) and retries.
+  const attempts = [
+    { includeOptional: true, consentArm: true, onRefusal: 'AU scope not consented; retrying sign-in with base scopes and ARM consent' },
+    { includeOptional: false, consentArm: true, onRefusal: 'ARM not consented; retrying sign-in with base scopes only' },
+  ];
+  const tokens = await (async () => {
+    for (const { includeOptional, consentArm, onRefusal } of attempts) {
+      try {
+        return await signIn(includeOptional, consentArm);
+      } catch (e) {
+        if (!isConsentError(e)) throw e;
+        log('info', 'auth', onRefusal);
+      }
+    }
+    return signIn(false, false);
+  })();
 
   const claims = await verifyIdToken(tokens.idToken, discovery, clientId);
   return { discovery, tokens, claims };
@@ -429,15 +444,25 @@ export async function acquireTokenInteractive(
 
   const clientId = getClientId(cloud);
 
-  const tokens = await runAuthCodeFlow({
+  const authorize = (consentScopes?: string[]) => runAuthCodeFlow({
     authorizationEndpoint,
     tokenEndpoint,
     clientId,
     scopes: scopeOverride ?? getScopes(cloud),
+    consentScopes,
     interactive: true,
     loginHint: account.userPrincipalName,
     claimsJson,
   });
+  // Plain re-auth (SIGN_IN_INTERACTIVE) also repairs missing ARM consent; step-ups leave consent alone.
+  // A tenant that blocks ARM consent must not stop re-auth, so a consent refusal retries without it.
+  const tokens = scopeOverride || claimsJson
+    ? await authorize()
+    : await authorize(getArmScopes(cloud)).catch(e => {
+      if (!isConsentError(e)) throw e;
+      log('info', 'auth', 'ARM not consented; retrying re-auth with base scopes only');
+      return authorize();
+    });
 
   // When ARM scopes are used, store the token as armAccessToken. Otherwise update the
   // primary Graph token fields. Both paths clear needsAttention. The token endpoint is

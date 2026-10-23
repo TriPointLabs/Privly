@@ -13,7 +13,7 @@
   import { Button, Badge, Card, Textarea, Spinner } from './ui/index.js';
   import { ChevronDown, X } from '@lucide/svelte';
   import { formatDuration } from '../utils/duration.js';
-  import { formatScopeLabel } from '../../tools/scopeParser.js';
+  import { formatScopeLabel, formatDirectoryScopeLabel } from '../../tools/scopeParser.js';
   import type { ApprovalItem, PendingRequest } from '../../types/pim.js';
 
   let { items, type, onApprovalConfirm, onApprovalDeny, onRequestCancel }: {
@@ -86,6 +86,9 @@
           <div class="flex flex-col gap-0.5">
             <span class="text-[10px] font-semibold text-text-faint uppercase tracking-wider">Approving</span>
             <span class="text-sm text-text-primary">{approval.roleName}</span>
+            {#if formatDirectoryScopeLabel(approval.directoryScopeId)}
+              <span class="text-xs text-text-faint truncate">{formatDirectoryScopeLabel(approval.directoryScopeId)}</span>
+            {/if}
             <span class="text-xs text-text-muted">{approval.requestorName} requested {formatDuration(approval.durationRequested)}</span>
           </div>
           <Textarea
@@ -133,6 +136,9 @@
           <div class="flex items-center gap-2">
             <div class="flex flex-col gap-0.5 flex-1 min-w-0">
               <span class="text-sm text-text-primary">{approval.roleName}</span>
+              {#if formatDirectoryScopeLabel(approval.directoryScopeId)}
+                <span class="text-xs text-text-faint truncate">{formatDirectoryScopeLabel(approval.directoryScopeId)}</span>
+              {/if}
               <span class="text-xs text-text-muted">Requested by {approval.requestorName}</span>
             </div>
             <button
@@ -210,6 +216,9 @@
           <span class="text-sm text-text-primary truncate">{req.roleName}</span>
           {#if req.scope}
             <span class="text-xs text-text-faint truncate">{formatScopeLabel(req.scope)}</span>
+          {/if}
+          {#if formatDirectoryScopeLabel(req.directoryScopeId)}
+            <span class="text-xs text-text-faint truncate">{formatDirectoryScopeLabel(req.directoryScopeId)}</span>
           {/if}
         </div>
         <div class="flex items-center gap-2 shrink-0 ml-2">

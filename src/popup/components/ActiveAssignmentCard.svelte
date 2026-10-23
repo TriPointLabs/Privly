@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ActiveRoleAssignment, ActiveGroupAssignment } from '../../types/pim';
-  import { formatScopeLabel } from '../../tools/scopeParser.js';
+  import { formatScopeLabel, formatDirectoryScopeLabel } from '../../tools/scopeParser.js';
   import { formatRemaining } from '../utils/duration.js';
   import { Button, Card, Spinner } from './ui/index.js';
   import { Info, X } from '@lucide/svelte';
@@ -71,6 +71,9 @@
       <span class="text-sm text-text-primary truncate">{displayName}</span>
       {#if 'scope' in assignment && assignment.scope}
         <span class="text-xs text-text-disabled truncate">{formatScopeLabel(assignment.scope)}</span>
+      {/if}
+      {#if 'directoryScopeId' in assignment && formatDirectoryScopeLabel(assignment.directoryScopeId)}
+        <span class="text-xs text-text-disabled truncate">{formatDirectoryScopeLabel(assignment.directoryScopeId)}</span>
       {/if}
     </div>
     <div class="flex items-center gap-1.5 shrink-0 ml-2">

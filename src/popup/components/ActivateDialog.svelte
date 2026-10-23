@@ -12,6 +12,7 @@
   import type { EligibleRole, EligibleGroup } from '../../types/pim.js';
   import type { JustificationPrefillRecord } from '../../tools/db.js';
   import { toMinutes, minutesToIso, formatMinutes } from '../utils/duration.js';
+  import { formatDirectoryScopeLabel } from '../../tools/scopeParser.js';
   import { getExtensionSettings } from '../../tools/db.js';
   import { MessageType, sendCommand } from '../../types/messages.js';
 
@@ -111,6 +112,10 @@
     target.kind === 'role' ? target.data.roleName : target.data.groupName
   );
 
+  const directoryScopeLabel = $derived(
+    target?.kind === 'role' ? formatDirectoryScopeLabel(target.data.directoryScopeId) : undefined
+  );
+
   const policy = $derived(target?.data.policyRules);
 
   const canSubmit = $derived(
@@ -152,6 +157,9 @@
         <div class="flex flex-col gap-0.5 min-w-0">
           <span id="activate-dialog-title" class="text-sm font-semibold text-text-primary truncate">Request Activation</span>
           <span class="text-xs text-text-muted truncate">{displayName}</span>
+          {#if directoryScopeLabel}
+            <span class="text-xs text-text-disabled truncate">{directoryScopeLabel}</span>
+          {/if}
         </div>
         <Button variant="icon" onclick={() => (open = false)} aria-label="Close activation dialog">
           <X class="w-4 h-4" aria-hidden="true" />

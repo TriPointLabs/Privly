@@ -32,7 +32,7 @@ import type {
   ApprovalItem,
   PendingRequest,
 } from '../types/pim.js';
-import { parseAzureScope } from '../tools/scopeParser.js';
+import { parseAzureScope, formatDirectoryScopeLabel } from '../tools/scopeParser.js';
 import { formatDuration } from './utils/duration.js';
 import { toPolicyRules } from './utils/policy.js';
 
@@ -82,12 +82,14 @@ export async function loadEligibleRoles(account: AccountRecord): Promise<Eligibl
     db.getAllFromIndex('roles', 'by-account', account.id),
     db.getAllFromIndex('activations', 'by-account', account.id),
   ]);
-  // Hide eligible roles that already have an active, non-expired role assignment.
+  // Hide eligible roles that already have an active, non-expired role assignment at the same directory scope.
   const now = Date.now();
-  const activeRoleDefIds = new Set(
-    activationRecords.filter(a => a.kind !== 'group' && (a.expiresAt === 0 || a.expiresAt > now)).map(a => a.roleDefinitionId!)
+  const activeRoleKeys = new Set(
+    activationRecords
+      .filter(a => a.kind !== 'group' && (a.expiresAt === 0 || a.expiresAt > now))
+      .map(a => `${a.roleDefinitionId}::${a.directoryScopeId ?? '/'}`)
   );
-  const eligible = roleRecords.filter(r => !activeRoleDefIds.has(r.roleDefinitionId));
+  const eligible = roleRecords.filter(r => !activeRoleKeys.has(`${r.roleDefinitionId}::${r.directoryScopeId}`));
   const [defs, policies] = await Promise.all([
     Promise.all(eligible.map(r => db.get('role_definitions', r.roleDefinitionId))),
     Promise.all(eligible.map(r => db.get('role_policies', `${account.tenantId}::${r.roleDefinitionId}`))),
@@ -97,6 +99,7 @@ export async function loadEligibleRoles(account: AccountRecord): Promise<Eligibl
     roleName: defs[i]?.displayName ?? r.roleDefinitionId,
     isBuiltIn: defs[i]?.isBuiltIn ?? false,
     roleType: 'EntraRole' as const,
+    directoryScopeId: r.directoryScopeId,
     memberType: r.memberType,
     policyRules: toPolicyRules(policies[i]),
   }));
@@ -134,6 +137,7 @@ export async function loadActiveAssignments(account: AccountRecord): Promise<Act
     roleName: roleDefs[i]?.displayName ?? a.roleDefinitionId!,
     isBuiltIn: roleDefs[i]?.isBuiltIn ?? false,
     roleType: 'EntraRole' as const,
+    directoryScopeId: a.directoryScopeId,
     isPermanent: a.isPermanent,
     memberType: a.memberType,
     startedAt: a.startedAt != null ? new Date(a.startedAt) : undefined,
@@ -214,6 +218,7 @@ export async function loadApprovals(accountId: string): Promise<ApprovalItem[]> 
     requestorJustification: r.requestorJustification,
     durationRequested: r.durationRequested,
     requestedAt: new Date(r.requestedAt),
+    directoryScopeId: r.directoryScopeId,
   }));
 }
 
@@ -225,6 +230,7 @@ export async function loadPendingRequests(accountId: string): Promise<PendingReq
     id: r.id,
     kind: r.kind,
     roleName: r.roleName,
+    directoryScopeId: r.directoryScopeId,
   }));
 }
 
@@ -475,6 +481,12 @@ const SCOPE_TYPE_LABELS: Record<AzureScopeRecord['scopeType'], string> = {
   resource: 'Res',
 };
 
+/** Appends the Entra directory scope label (e.g. ` @ Admin unit: {id}`) to a role label for any non-root scope. */
+function withScope(label: string, directoryScopeId: string | undefined): string {
+  const scope = formatDirectoryScopeLabel(directoryScopeId);
+  return scope ? `${label} @ ${scope}` : label;
+}
+
 /** Recursively builds one Azure scope node: roles at this scope, then child scopes via the by-parent index. */
 async function buildAzureScopeNode(
   db: Awaited<ReturnType<typeof getDB>>,
@@ -547,18 +559,18 @@ export async function loadEntitlementTree(): Promise<AccountEntitlements[]> {
         db.get('role_policies', `${account.tenantId}::${r.roleDefinitionId}`),
       ]);
       const p = policyDetail(policy);
-      const act = liveActs.find(a => a.kind !== 'group' && a.roleDefinitionId === r.roleDefinitionId);
+      const act = liveActs.find(a => a.kind !== 'group' && a.roleDefinitionId === r.roleDefinitionId && (a.directoryScopeId ?? '/') === r.directoryScopeId);
       return {
-        label: def?.displayName ?? r.roleDefinitionId,
+        label: withScope(def?.displayName ?? r.roleDefinitionId, r.directoryScopeId),
         detail: act ? `${activeUntil(act.expiresAt, act.isPermanent)} \u00b7 ${p.detail}` : p.detail,
         status: act ? 'active' as const : p.status,
       };
     }));
-    const eligibleDefIds = new Set(roles.map(r => r.roleDefinitionId));
+    const eligibleKeys = new Set(roles.map(r => `${r.roleDefinitionId}::${r.directoryScopeId}`));
     for (const act of liveActs) {
-      if (act.kind !== 'group' && act.roleDefinitionId && !eligibleDefIds.has(act.roleDefinitionId)) {
+      if (act.kind !== 'group' && act.roleDefinitionId && !eligibleKeys.has(`${act.roleDefinitionId}::${act.directoryScopeId ?? '/'}`)) {
         const def = await db.get('role_definitions', act.roleDefinitionId);
-        roleNodes.push({ label: def?.displayName ?? act.roleDefinitionId, detail: activeUntil(act.expiresAt, act.isPermanent), status: 'active' });
+        roleNodes.push({ label: withScope(def?.displayName ?? act.roleDefinitionId, act.directoryScopeId), detail: activeUntil(act.expiresAt, act.isPermanent), status: 'active' });
       }
     }
 

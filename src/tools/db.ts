@@ -178,6 +178,8 @@ export interface ApprovalRecord {
   kind: 'role' | 'group';
   /** Entra role definition ID. Present when kind === 'role'. */
   roleDefinitionId?: string;
+  /** Directory scope ID of the requested role, e.g. "/" for tenant-wide. Present when kind === 'role'. */
+  directoryScopeId?: string;
   /** Entra group object ID. Present when kind === 'group'. */
   groupId?: string;
   /** Member or owner. Present when kind === 'group'. */
@@ -210,6 +212,8 @@ export interface PendingRequestRecord {
   kind: 'role' | 'group';
   /** Entra role definition ID. Present when kind === 'role'. */
   roleDefinitionId?: string;
+  /** Directory scope ID of the requested role, e.g. "/" for tenant-wide. Present when kind === 'role'. */
+  directoryScopeId?: string;
   /** Entra group object ID. Present when kind === 'group'. */
   groupId?: string;
   /** Member or owner. Present when kind === 'group'. */

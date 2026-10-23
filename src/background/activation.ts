@@ -196,7 +196,7 @@ export async function executeActivationRequest(opts: {
  * the same role can be held at more than one scope.
  */
 export type ExpectedActivation =
-  | { kind: 'role'; roleDefinitionId: string }
+  | { kind: 'role'; roleDefinitionId: string; directoryScopeId: string }
   | { kind: 'group'; groupId: string }
   | { kind: 'azure'; scopeId: string; roleDefinitionId: string };
 
@@ -213,7 +213,7 @@ async function activationIsVisible(accountId: string, expect: ExpectedActivation
   }
   const activations = await db.getAllFromIndex('activations', 'by-account', accountId);
   return expect.kind === 'role'
-    ? activations.some(a => a.kind === 'role' && a.roleDefinitionId === expect.roleDefinitionId)
+    ? activations.some(a => a.kind === 'role' && a.roleDefinitionId === expect.roleDefinitionId && (a.directoryScopeId ?? '/') === expect.directoryScopeId)
     : activations.some(a => a.kind === 'group' && a.groupId === expect.groupId);
 }
 

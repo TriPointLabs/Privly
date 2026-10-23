@@ -114,7 +114,7 @@ async function handleActivate(kind: 'role' | 'group', params: ActivateParams): P
     };
     policyKey = `${account.tenantId}::${roleRecord.roleDefinitionId}`;
     policyStoreName = 'role_policies';
-    expectActivation = { kind: 'role', roleDefinitionId: roleRecord.roleDefinitionId };
+    expectActivation = { kind: 'role', roleDefinitionId: roleRecord.roleDefinitionId, directoryScopeId: roleRecord.directoryScopeId };
     refreshStalePolicy = () => refreshSingleRolePolicy(account, roleRecord.roleDefinitionId);
   } else {
     const groupRecord = await db.get('groups', entityId);

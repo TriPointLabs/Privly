@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { EligibleRole } from '../../types/pim';
-  import { formatScopeLabel } from '../../tools/scopeParser.js';
+  import { formatScopeLabel, formatDirectoryScopeLabel } from '../../tools/scopeParser.js';
   import { Badge, Button, Card, Spinner } from './ui/index.js';
   import { KeyRound, Info } from '@lucide/svelte';
 
@@ -22,6 +22,9 @@
       {/if}
       {#if role.scope}
         <span class="text-xs text-text-disabled truncate">{formatScopeLabel(role.scope)}</span>
+      {/if}
+      {#if formatDirectoryScopeLabel(role.directoryScopeId, role.directoryScopeName)}
+        <span class="text-xs text-text-disabled truncate">{formatDirectoryScopeLabel(role.directoryScopeId, role.directoryScopeName)}</span>
       {/if}
     </div>
   </div>

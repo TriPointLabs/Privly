@@ -11,6 +11,7 @@
   import { Button, Badge, Card } from './ui/index.js';
   import { ChevronLeft, Copy } from '@lucide/svelte';
   import { formatDuration, formatRemaining } from '../utils/duration.js';
+  import { formatDirectoryScopeLabel } from '../../tools/scopeParser.js';
 
   function scopeKindLabel(kind: string): string {
     switch (kind) {
@@ -154,6 +155,32 @@
             <button
               type="button"
               onclick={() => navigator.clipboard.writeText(scope.rawScope)}
+              aria-label="Copy scope to clipboard"
+              class="shrink-0 p-1 rounded text-text-disabled hover:text-text-tertiary hover:bg-surface-700 transition-colors"
+            >
+              <Copy class="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Directory scope (Entra roles scoped below the tenant root only) -->
+    {#if (target.kind === 'eligible-role' || target.kind === 'active-role') && target.data.roleType === 'EntraRole' && target.data.directoryScopeId && target.data.directoryScopeId !== '/'}
+      {@const directoryScopeId = target.data.directoryScopeId}
+      <div class="flex flex-col gap-2">
+        <h3 class="text-[10px] font-semibold text-text-faint uppercase tracking-wider">Scope</h3>
+        <div class="flex flex-col rounded-lg overflow-hidden border border-surface-600 divide-y divide-surface-700">
+          <div class="detail-row">
+            <span class="text-xs text-text-tertiary shrink-0">Directory scope</span>
+            <span class="text-xs text-text-primary font-medium truncate ml-4">{formatDirectoryScopeLabel(directoryScopeId, target.data.directoryScopeName)}</span>
+          </div>
+          <div class="detail-row gap-2">
+            <span class="text-xs text-text-tertiary shrink-0">Scope</span>
+            <span class="text-xs text-text-disabled truncate font-mono flex-1 min-w-0">{directoryScopeId}</span>
+            <button
+              type="button"
+              onclick={() => navigator.clipboard.writeText(directoryScopeId)}
               aria-label="Copy scope to clipboard"
               class="shrink-0 p-1 rounded text-text-disabled hover:text-text-tertiary hover:bg-surface-700 transition-colors"
             >

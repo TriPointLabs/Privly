@@ -64,6 +64,10 @@ export interface EligibleRole {
   policyRules: PolicyRules;
   /** Present for Azure RBAC roles; absent for Entra directory roles. */
   scope?: AzureScope;
+  /** Entra directory scope ID (e.g. "/" or "/administrativeUnits/{id}"). Entra roles only; undefined for Azure roles. */
+  directoryScopeId?: string;
+  /** Display name of the Entra directory scope object. Entra roles only; undefined for Azure roles. */
+  directoryScopeName?: string;
   /** How the eligibility is derived: Direct, via a Group, or Inherited from a parent scope. */
   memberType?: MemberType;
 }
@@ -91,6 +95,10 @@ export interface ActiveRoleAssignment {
   expiresAt: Date;
   policyRules: PolicyRules;
   scope?: AzureScope;
+  /** Entra directory scope ID (e.g. "/" or "/administrativeUnits/{id}"). Entra roles only; undefined for Azure roles. */
+  directoryScopeId?: string;
+  /** Display name of the Entra directory scope object. Entra roles only; undefined for Azure roles. */
+  directoryScopeName?: string;
   /** How the role is held: Direct, via a Group, or Inherited from a parent scope. Undefined until the next sync. */
   memberType?: MemberType;
   /** True when the role is permanently assigned (not PIM-activated). Cannot be deactivated via Privly. */
@@ -134,6 +142,10 @@ export interface ApprovalItem {
   durationRequested: string;
   requestedAt: Date;
   scope?: AzureScope;
+  /** Entra directory scope ID (e.g. "/" or "/administrativeUnits/{id}"). Entra roles only; undefined for Azure roles. */
+  directoryScopeId?: string;
+  /** Display name of the Entra directory scope object. Entra roles only; undefined for Azure roles. */
+  directoryScopeName?: string;
 }
 
 /** A PIM activation request submitted by the current user awaiting approval. */
@@ -142,4 +154,8 @@ export interface PendingRequest {
   kind: 'role' | 'group';
   roleName: string;
   scope?: AzureScope;
+  /** Entra directory scope ID (e.g. "/" or "/administrativeUnits/{id}"). Entra roles only; undefined for Azure roles. */
+  directoryScopeId?: string;
+  /** Display name of the Entra directory scope object. Entra roles only; undefined for Azure roles. */
+  directoryScopeName?: string;
 }

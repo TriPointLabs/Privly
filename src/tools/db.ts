@@ -68,6 +68,8 @@ export interface RoleRecord {
   roleDefinitionId: string;
   /** Directory scope ID, e.g. "/" for tenant-wide. */
   directoryScopeId: string;
+  /** Display name of the scope object resolved via $expand=directoryScope; undefined for tenant-wide or when Graph returned no name. */
+  directoryScopeName?: string;
   /** How the eligibility is derived (Graph `memberType`, normalized): Direct, Group, or Inherited. Undefined for records written before this field was added. */
   memberType?: 'Direct' | 'Group' | 'Inherited';
 }
@@ -144,6 +146,8 @@ export interface ActivationRecord {
   roleDefinitionId?: string;
   /** Directory scope ID from the assignment schedule. Present when kind === 'role'. Required for SelfDeactivate requests to match the original activation scope. */
   directoryScopeId?: string;
+  /** Display name of the scope object resolved via $expand=directoryScope; undefined for tenant-wide or when Graph returned no name. */
+  directoryScopeName?: string;
   /** Entra group object ID. Present when kind === 'group'. */
   groupId?: string;
   /** Member or owner access. Present when kind === 'group'. */
@@ -178,6 +182,10 @@ export interface ApprovalRecord {
   kind: 'role' | 'group';
   /** Entra role definition ID. Present when kind === 'role'. */
   roleDefinitionId?: string;
+  /** Directory scope ID of the requested role, e.g. "/" for tenant-wide. Present when kind === 'role'. */
+  directoryScopeId?: string;
+  /** Display name of the scope object resolved via $expand=directoryScope; undefined for tenant-wide or when Graph returned no name. */
+  directoryScopeName?: string;
   /** Entra group object ID. Present when kind === 'group'. */
   groupId?: string;
   /** Member or owner. Present when kind === 'group'. */
@@ -210,6 +218,10 @@ export interface PendingRequestRecord {
   kind: 'role' | 'group';
   /** Entra role definition ID. Present when kind === 'role'. */
   roleDefinitionId?: string;
+  /** Directory scope ID of the requested role, e.g. "/" for tenant-wide. Present when kind === 'role'. */
+  directoryScopeId?: string;
+  /** Display name of the scope object resolved via $expand=directoryScope; undefined for tenant-wide or when Graph returned no name. */
+  directoryScopeName?: string;
   /** Entra group object ID. Present when kind === 'group'. */
   groupId?: string;
   /** Member or owner. Present when kind === 'group'. */

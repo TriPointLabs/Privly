@@ -100,7 +100,6 @@ export async function loadEligibleRoles(account: AccountRecord): Promise<Eligibl
     isBuiltIn: defs[i]?.isBuiltIn ?? false,
     roleType: 'EntraRole' as const,
     directoryScopeId: r.directoryScopeId,
-    directoryScopeName: r.directoryScopeName,
     memberType: r.memberType,
     policyRules: toPolicyRules(policies[i]),
   }));
@@ -139,7 +138,6 @@ export async function loadActiveAssignments(account: AccountRecord): Promise<Act
     isBuiltIn: roleDefs[i]?.isBuiltIn ?? false,
     roleType: 'EntraRole' as const,
     directoryScopeId: a.directoryScopeId,
-    directoryScopeName: a.directoryScopeName,
     isPermanent: a.isPermanent,
     memberType: a.memberType,
     startedAt: a.startedAt != null ? new Date(a.startedAt) : undefined,
@@ -221,7 +219,6 @@ export async function loadApprovals(accountId: string): Promise<ApprovalItem[]> 
     durationRequested: r.durationRequested,
     requestedAt: new Date(r.requestedAt),
     directoryScopeId: r.directoryScopeId,
-    directoryScopeName: r.directoryScopeName,
   }));
 }
 
@@ -234,7 +231,6 @@ export async function loadPendingRequests(accountId: string): Promise<PendingReq
     kind: r.kind,
     roleName: r.roleName,
     directoryScopeId: r.directoryScopeId,
-    directoryScopeName: r.directoryScopeName,
   }));
 }
 
@@ -485,9 +481,9 @@ const SCOPE_TYPE_LABELS: Record<AzureScopeRecord['scopeType'], string> = {
   resource: 'Res',
 };
 
-/** Appends the Entra directory scope label (e.g. ` @ Admin unit: Sales`) to a role label for any non-root scope. */
-function withScope(label: string, directoryScopeId: string | undefined, directoryScopeName: string | undefined): string {
-  const scope = formatDirectoryScopeLabel(directoryScopeId, directoryScopeName);
+/** Appends the Entra directory scope label (e.g. ` @ Admin unit: {id}`) to a role label for any non-root scope. */
+function withScope(label: string, directoryScopeId: string | undefined): string {
+  const scope = formatDirectoryScopeLabel(directoryScopeId);
   return scope ? `${label} @ ${scope}` : label;
 }
 
@@ -565,7 +561,7 @@ export async function loadEntitlementTree(): Promise<AccountEntitlements[]> {
       const p = policyDetail(policy);
       const act = liveActs.find(a => a.kind !== 'group' && a.roleDefinitionId === r.roleDefinitionId && (a.directoryScopeId ?? '/') === r.directoryScopeId);
       return {
-        label: withScope(def?.displayName ?? r.roleDefinitionId, r.directoryScopeId, r.directoryScopeName),
+        label: withScope(def?.displayName ?? r.roleDefinitionId, r.directoryScopeId),
         detail: act ? `${activeUntil(act.expiresAt, act.isPermanent)} \u00b7 ${p.detail}` : p.detail,
         status: act ? 'active' as const : p.status,
       };
@@ -574,7 +570,7 @@ export async function loadEntitlementTree(): Promise<AccountEntitlements[]> {
     for (const act of liveActs) {
       if (act.kind !== 'group' && act.roleDefinitionId && !eligibleKeys.has(`${act.roleDefinitionId}::${act.directoryScopeId ?? '/'}`)) {
         const def = await db.get('role_definitions', act.roleDefinitionId);
-        roleNodes.push({ label: withScope(def?.displayName ?? act.roleDefinitionId, act.directoryScopeId, act.directoryScopeName), detail: activeUntil(act.expiresAt, act.isPermanent), status: 'active' });
+        roleNodes.push({ label: withScope(def?.displayName ?? act.roleDefinitionId, act.directoryScopeId), detail: activeUntil(act.expiresAt, act.isPermanent), status: 'active' });
       }
     }
 

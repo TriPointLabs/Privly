@@ -72,8 +72,8 @@
       {#if 'scope' in assignment && assignment.scope}
         <span class="text-xs text-text-disabled truncate">{formatScopeLabel(assignment.scope)}</span>
       {/if}
-      {#if 'directoryScopeId' in assignment && formatDirectoryScopeLabel(assignment.directoryScopeId, assignment.directoryScopeName)}
-        <span class="text-xs text-text-disabled truncate">{formatDirectoryScopeLabel(assignment.directoryScopeId, assignment.directoryScopeName)}</span>
+      {#if 'directoryScopeId' in assignment && formatDirectoryScopeLabel(assignment.directoryScopeId)}
+        <span class="text-xs text-text-disabled truncate">{formatDirectoryScopeLabel(assignment.directoryScopeId)}</span>
       {/if}
     </div>
     <div class="flex items-center gap-1.5 shrink-0 ml-2">

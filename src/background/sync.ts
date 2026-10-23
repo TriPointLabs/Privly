@@ -246,8 +246,7 @@ export async function syncPendingApprovals(account: AccountRecord): Promise<void
   const roleUrl =
     `${account.graphHost}/v1.0/roleManagement/directory/roleAssignmentScheduleRequests/filterByCurrentUser(on='approver')` +
     `?$filter=status eq 'PendingApproval'` +
-    `&$select=id,principalId,roleDefinitionId,directoryScopeId,status,justification,createdDateTime,scheduleInfo,approvalId,createdBy` +
-    `&$expand=directoryScope`;
+    `&$select=id,principalId,roleDefinitionId,directoryScopeId,status,justification,createdDateTime,scheduleInfo,approvalId,createdBy`;
 
   const groupUrl =
     `${account.graphHost}/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleRequests/filterByCurrentUser(on='approver')` +
@@ -268,7 +267,6 @@ export async function syncPendingApprovals(account: AccountRecord): Promise<void
     approvalId?: string;
     createdBy?: { user?: { id: string; displayName?: string } };
     directoryScopeId?: string;
-    directoryScope?: { displayName?: string } | null;
   };
 
   const [roleRes, groupRes] = await Promise.all([
@@ -299,7 +297,6 @@ export async function syncPendingApprovals(account: AccountRecord): Promise<void
       roleDefinitionId: item.roleDefinitionId,
       roleName: roleDefMap.get(item.roleDefinitionId) ?? item.roleDefinitionId,
       directoryScopeId: item.directoryScopeId,
-      directoryScopeName: item.directoryScope?.displayName || undefined,
       requestorId: item.principalId,
       requestorName: item.createdBy?.user?.displayName ?? item.principalId,
       requestorJustification: item.justification ?? '',
@@ -358,8 +355,7 @@ export async function syncMyPendingRequests(account: AccountRecord): Promise<voi
   const roleUrl =
     `${account.graphHost}/v1.0/roleManagement/directory/roleAssignmentScheduleRequests/filterByCurrentUser(on='principal')` +
     `?$filter=status eq 'PendingApproval'` +
-    `&$select=id,principalId,roleDefinitionId,directoryScopeId,status,justification,createdDateTime,scheduleInfo` +
-    `&$expand=directoryScope`;
+    `&$select=id,principalId,roleDefinitionId,directoryScopeId,status,justification,createdDateTime,scheduleInfo`;
 
   const groupUrl =
     `${account.graphHost}/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleRequests/filterByCurrentUser(on='principal')` +
@@ -376,7 +372,6 @@ export async function syncMyPendingRequests(account: AccountRecord): Promise<voi
     accessId?: 'member' | 'owner';
     createdDateTime: string;
     directoryScopeId?: string;
-    directoryScope?: { displayName?: string } | null;
   };
 
   const [roleRes, groupRes] = await Promise.all([
@@ -411,7 +406,6 @@ export async function syncMyPendingRequests(account: AccountRecord): Promise<voi
       roleDefinitionId: item.roleDefinitionId,
       roleName: (item.roleDefinitionId ? roleDefMap.get(item.roleDefinitionId) : undefined) ?? item.roleDefinitionId ?? item.id,
       directoryScopeId: item.directoryScopeId,
-      directoryScopeName: item.directoryScope?.displayName || undefined,
       requestedAt: new Date(item.createdDateTime).getTime(),
     })),
     ...groupItems.map(item => ({
@@ -477,7 +471,7 @@ export async function syncRoleAssignments(account: AccountRecord, { force = fals
   const url =
     `${account.graphHost}/v1.0/roleManagement/directory/roleEligibilitySchedules` +
     `?$filter=principalId eq '${account.accountId}' and status eq 'Provisioned'` +
-    `&$expand=roleDefinition($select=id,displayName,isBuiltIn),directoryScope` +
+    `&$expand=roleDefinition($select=id,displayName,isBuiltIn)` +
     `&$select=id,principalId,roleDefinitionId,directoryScopeId,status,memberType`;
 
   type EligibleScheduleItem = {
@@ -487,7 +481,6 @@ export async function syncRoleAssignments(account: AccountRecord, { force = fals
     status: string;
     memberType?: string;
     roleDefinition?: { id?: string; displayName?: string; isBuiltIn?: boolean };
-    directoryScope?: { displayName?: string } | null;
   };
 
   log('info', 'sync', `Fetching eligible assignments for ${maskUpn(account.userPrincipalName)} (${account.cloud})`);
@@ -518,7 +511,6 @@ export async function syncRoleAssignments(account: AccountRecord, { force = fals
     accountId: account.id,
     roleDefinitionId: item.roleDefinitionId,
     directoryScopeId: item.directoryScopeId,
-    directoryScopeName: item.directoryScope?.displayName || undefined,
     memberType: normalizeMemberType(item.memberType),
   }));
 
@@ -584,8 +576,7 @@ export async function syncActiveAssignments(account: AccountRecord): Promise<voi
   const url =
     `${account.graphHost}/v1.0/roleManagement/directory/roleAssignmentSchedules` +
     `?$filter=principalId eq '${account.accountId}' and status eq 'Provisioned'` +
-    `&$select=id,roleDefinitionId,directoryScopeId,scheduleInfo,status,memberType` +
-    `&$expand=directoryScope`;
+    `&$select=id,roleDefinitionId,directoryScopeId,scheduleInfo,status,memberType`;
 
   type ActiveScheduleItem = {
     id: string;
@@ -594,7 +585,6 @@ export async function syncActiveAssignments(account: AccountRecord): Promise<voi
     scheduleInfo?: { startDateTime?: string | null; expiration?: { endDateTime?: string | null; type?: string } };
     status: string;
     memberType?: string;
-    directoryScope?: { displayName?: string } | null;
   };
 
   log('info', 'sync', `Fetching active assignments for ${maskUpn(account.userPrincipalName)}`);
@@ -646,7 +636,6 @@ export async function syncActiveAssignments(account: AccountRecord): Promise<voi
     kind: 'role' as const,
     roleDefinitionId: item.roleDefinitionId,
     directoryScopeId: item.directoryScopeId,
-    directoryScopeName: item.directoryScope?.displayName || undefined,
     isPermanent: item.scheduleInfo?.expiration?.type === 'noExpiration',
     startedAt: item.scheduleInfo?.startDateTime ? new Date(item.scheduleInfo.startDateTime).getTime() : undefined,
     expiresAt: item.scheduleInfo?.expiration?.endDateTime

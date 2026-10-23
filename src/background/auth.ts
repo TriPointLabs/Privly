@@ -287,7 +287,7 @@ export async function refreshAccountTokens(account: AccountRecord): Promise<void
       ...fresh,
       accessToken: tokens.accessToken,
       grantedScopes: scopesFromToken(tokens.accessToken),
-      refreshToken: tokens.refreshToken,
+      refreshToken: tokens.refreshToken ?? fresh.refreshToken,
       tokenExpiresAt: tokens.tokenExpiresAt,
       needsAttention: null,
     });
@@ -322,7 +322,7 @@ export async function refreshAccountTokens(account: AccountRecord): Promise<void
       ...fresh2,
       accessToken: tokens.accessToken,
       grantedScopes: scopesFromToken(tokens.accessToken),
-      refreshToken: tokens.refreshToken,
+      refreshToken: tokens.refreshToken ?? fresh2.refreshToken,
       tokenExpiresAt: tokens.tokenExpiresAt,
       loginHost: discovery.loginHost,
       graphHost: discovery.graphHost,
@@ -440,7 +440,10 @@ export async function acquireTokenInteractive(
   });
 
   // When ARM scopes are used, store the token as armAccessToken. Otherwise update the
-  // primary Graph token fields. Both paths preserve the refresh token and clear needsAttention.
+  // primary Graph token fields. Both paths clear needsAttention. The token endpoint is
+  // not guaranteed to return a refresh_token (the ARM exchange omits offline_access and
+  // relies on undocumented Entra behavior), so a missing one keeps the stored token
+  // rather than clobbering it with undefined.
   const db = await getDB();
   const freshAccount = await db.get('accounts', account.id) ?? account;
   if (storeAs === 'arm') {
@@ -448,7 +451,7 @@ export async function acquireTokenInteractive(
       ...freshAccount,
       armAccessToken: tokens.accessToken,
       armTokenExpiresAt: tokens.tokenExpiresAt,
-      refreshToken: tokens.refreshToken,
+      refreshToken: tokens.refreshToken ?? freshAccount.refreshToken,
       needsAttention: null,
     });
   } else {
@@ -456,7 +459,7 @@ export async function acquireTokenInteractive(
       ...freshAccount,
       accessToken: tokens.accessToken,
       grantedScopes: scopesFromToken(tokens.accessToken),
-      refreshToken: tokens.refreshToken,
+      refreshToken: tokens.refreshToken ?? freshAccount.refreshToken,
       tokenExpiresAt: tokens.tokenExpiresAt,
       needsAttention: null,
     });

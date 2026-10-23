@@ -26,6 +26,22 @@ import {
 import { notifyDbChanged } from './utils.ts';
 import { log, maskUpn } from './log.ts';
 
+/** Returns the space-split `scp` claim of a Graph access token, or [] if it cannot be decoded. */
+export function scopesFromToken(accessToken: string): string[] {
+  try {
+    const scp = decodeJwt(accessToken).scp;
+    return typeof scp === 'string' ? scp.split(' ').filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** True when an auth error means the requested scopes lack (admin) consent. */
+export function isConsentError(e: unknown): boolean {
+  const message = e instanceof Error ? e.message : String(e);
+  return message.includes('AADSTS65001') || message.includes('consent_required');
+}
+
 /**
  * Downloads the account's 120x120 profile photo from Microsoft Graph and returns it as a base64 data URL,
  * or null if unavailable.
@@ -270,6 +286,7 @@ export async function refreshAccountTokens(account: AccountRecord): Promise<void
     await db.put('accounts', {
       ...fresh,
       accessToken: tokens.accessToken,
+      grantedScopes: scopesFromToken(tokens.accessToken),
       refreshToken: tokens.refreshToken,
       tokenExpiresAt: tokens.tokenExpiresAt,
       needsAttention: null,
@@ -304,6 +321,7 @@ export async function refreshAccountTokens(account: AccountRecord): Promise<void
     await db.put('accounts', {
       ...fresh2,
       accessToken: tokens.accessToken,
+      grantedScopes: scopesFromToken(tokens.accessToken),
       refreshToken: tokens.refreshToken,
       tokenExpiresAt: tokens.tokenExpiresAt,
       loginHost: discovery.loginHost,
@@ -348,13 +366,19 @@ export async function performSignIn(
   const discovery = await discoverCloud(tenant);
   const clientId = getClientId(discovery.cloud);
 
-  const tokens = await runAuthCodeFlow({
+  const signIn = (includeOptional: boolean) => runAuthCodeFlow({
     authorizationEndpoint: discovery.authorizationEndpoint,
     tokenEndpoint: discovery.tokenEndpoint,
     clientId,
-    scopes: getScopes(discovery.cloud),
+    scopes: getScopes(discovery.cloud, { includeOptional }),
     interactive: true,
     loginHint: username,
+  });
+  // Optional scopes are asked for once up front; a tenant that has not consented to them must not block sign-in.
+  const tokens = await signIn(true).catch(e => {
+    if (!isConsentError(e)) throw e;
+    log('info', 'auth', 'AU scope not consented; retrying sign-in with base scopes');
+    return signIn(false);
   });
 
   const claims = await verifyIdToken(tokens.idToken, discovery, clientId);
@@ -375,14 +399,20 @@ export async function performSignIn(
  *
  * When `scopeOverride` is provided (e.g. ARM scopes), the token exchange uses
  * those scopes and the resulting token is stored as `armAccessToken` instead of
- * the default `accessToken`.
+ * the default `accessToken`, unless `storeAs` is `'graph'`.
  * @param account - The account to re-authenticate.
  * @param claimsJson - Optional claims JSON forwarded to `buildAuthUrl` and the token endpoint.
  * @param scopeOverride - Optional scope array. When provided, overrides the default Graph scopes and stores the resulting token as `armAccessToken`.
+ * @param storeAs - Which token fields to write. Defaults to `'arm'` when `scopeOverride` is given, else `'graph'`.
  * @returns The new access token string.
  * @throws On state mismatch, missing authorization code, or token exchange failure.
  */
-export async function acquireTokenInteractive(account: AccountRecord, claimsJson?: string, scopeOverride?: string[]): Promise<string> {
+export async function acquireTokenInteractive(
+  account: AccountRecord,
+  claimsJson?: string,
+  scopeOverride?: string[],
+  storeAs: 'graph' | 'arm' = scopeOverride ? 'arm' : 'graph',
+): Promise<string> {
   let authorizationEndpoint: string;
   let tokenEndpoint: string;
   let cloud = account.cloud;
@@ -398,7 +428,6 @@ export async function acquireTokenInteractive(account: AccountRecord, claimsJson
   }
 
   const clientId = getClientId(cloud);
-  const isArmScope = !!scopeOverride;
 
   const tokens = await runAuthCodeFlow({
     authorizationEndpoint,
@@ -414,7 +443,7 @@ export async function acquireTokenInteractive(account: AccountRecord, claimsJson
   // primary Graph token fields. Both paths preserve the refresh token and clear needsAttention.
   const db = await getDB();
   const freshAccount = await db.get('accounts', account.id) ?? account;
-  if (isArmScope) {
+  if (storeAs === 'arm') {
     await db.put('accounts', {
       ...freshAccount,
       armAccessToken: tokens.accessToken,
@@ -426,6 +455,7 @@ export async function acquireTokenInteractive(account: AccountRecord, claimsJson
     await db.put('accounts', {
       ...freshAccount,
       accessToken: tokens.accessToken,
+      grantedScopes: scopesFromToken(tokens.accessToken),
       refreshToken: tokens.refreshToken,
       tokenExpiresAt: tokens.tokenExpiresAt,
       needsAttention: null,

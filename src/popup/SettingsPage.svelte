@@ -1,21 +1,41 @@
 <script lang="ts">
   import browser from 'webextension-polyfill';
-  import { Button, Toggle } from './components/ui/index.js';
+  import { Badge, Button, Spinner, Toggle } from './components/ui/index.js';
   import { ChevronLeft } from '@lucide/svelte';
   import { getExtensionSettings } from '../tools/db.js';
-  import type { ExtensionSettingsRecord } from '../tools/db.js';
+  import type { AccountRecord, ExtensionSettingsRecord } from '../tools/db.js';
+  import { AU_SCOPE } from '../tools/oauth.js';
+  import { loadAccounts } from './data.js';
   import { isMessageOfType, MessageType, sendCommand } from '../types/messages.js';
   import { applyTheme, resolveTheme, cacheThemePreference, type ThemePreference } from './theme.js';
 
   let { onBack, onOpenDebug }: { onBack: () => void; onOpenDebug: () => void } = $props();
 
   let extensionSettings = $state<ExtensionSettingsRecord | null>(null);
+  let activeAccount = $state<AccountRecord | null>(null);
+  let auPending = $state(false);
+  let auError = $state<string | null>(null);
 
   // CRITICAL: register listener synchronously before any await
   browser.runtime.onMessage.addListener((message) => {
     if (!isMessageOfType(MessageType.DB_CHANGED, message)) return;
     if (message.stores.includes('extension_settings')) refreshExtensionSettings();
+    if (message.stores.includes('accounts')) refreshActiveAccount();
   });
+
+  async function refreshActiveAccount() {
+    const { accounts, activeAccountId } = await loadAccounts();
+    activeAccount = accounts.find(a => a.id === activeAccountId) ?? null;
+  }
+
+  async function grantAuScope() {
+    if (!activeAccount) return;
+    auPending = true;
+    auError = null;
+    const ack = await sendCommand(MessageType.GRANT_AU_SCOPE, { accountId: activeAccount.id });
+    auPending = false;
+    if (!ack.ok) auError = ack.error ?? 'Could not enable the permission';
+  }
 
   async function refreshExtensionSettings() {
     extensionSettings = await getExtensionSettings();
@@ -23,6 +43,7 @@
 
   async function init() {
     extensionSettings = await getExtensionSettings();
+    await refreshActiveAccount();
   }
 
   init();
@@ -134,6 +155,31 @@
           </p>
         </div>
       </div>
+
+      {#if activeAccount}
+        <!-- Account section -->
+        <div class="flex flex-col gap-3">
+          <span class="text-xs font-semibold uppercase tracking-wide text-text-faint">Account</span>
+
+          <div class="flex flex-col gap-0.5">
+            <div class="flex items-center justify-between">
+              <span class="text-sm text-text-secondary">Admin unit names</span>
+              {#if activeAccount.grantedScopes?.includes(AU_SCOPE)}
+                <Badge color="green">Granted</Badge>
+              {:else}
+                <Button variant="brand" onclick={grantAuScope} disabled={auPending} class="flex items-center gap-1.5">
+                  {#if auPending}<Spinner />{/if}
+                  Enable
+                </Button>
+              {/if}
+            </div>
+            <p class="text-xs text-text-faint pr-10">Show admin unit names on AU-scoped roles. Needs the Read administrative units permission, which an administrator may need to approve.</p>
+            {#if auError}
+              <p role="alert" class="text-xs text-status-red">{auError}</p>
+            {/if}
+          </div>
+        </div>
+      {/if}
 
       <!-- Extension Icon section -->
       <div class="flex flex-col gap-3">

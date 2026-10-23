@@ -30,7 +30,7 @@ import {
   type AzurePolicyRecord,
   SYNC_STATE_ID,
 } from '../tools/db.ts';
-import { getArmHost } from '../tools/oauth.ts';
+import { getArmHost, AU_SCOPE } from '../tools/oauth.ts';
 import { notify } from '../tools/notify.ts';
 import { normalizeMemberType } from '../tools/membership.ts';
 import type { PolicyRules } from '../types/pim.ts';
@@ -230,9 +230,9 @@ async function syncPolicyRules(
 
 /**
  * Resolves administrative unit display names for AU-scoped role directoryScopeIds and caches
- * them in `directory_scopes`. Needs the admin-consented `AdministrativeUnit.Read.All` scope;
- * without it Graph returns 403, which is logged per id and otherwise ignored so labels fall
- * back to the raw ID. Records fresher than POLICY_TTL_MS are skipped unless `force`.
+ * them in `directory_scopes`. Runs only when the account's token carries AU_SCOPE; otherwise
+ * labels fall back to the raw ID. Per-id fetch failures are logged and skipped. Records fresher
+ * than POLICY_TTL_MS are skipped unless `force`.
  */
 async function resolveDirectoryScopeNames(
   account: AccountRecord,
@@ -240,6 +240,7 @@ async function resolveDirectoryScopeNames(
   { force = false }: { force?: boolean } = {},
 ): Promise<void> {
   if (!account.accessToken || !account.graphHost) return;
+  if (!account.grantedScopes?.includes(AU_SCOPE)) return;
 
   const auIds = new Map<string, string>();
   for (const scopeId of directoryScopeIds) {
@@ -266,7 +267,6 @@ async function resolveDirectoryScopeNames(
       { headers },
     );
     if (!res.ok) {
-      // 403 means the tenant has not consented to AdministrativeUnit.Read.All; the label falls back to the ID.
       log('warn', 'sync', `Admin unit name fetch failed for ${shortId(auId)}: HTTP ${res.status}`);
       return;
     }

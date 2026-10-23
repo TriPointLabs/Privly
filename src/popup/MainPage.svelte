@@ -17,6 +17,7 @@
   import AzureDetailPage from './components/AzureDetailPage.svelte';
   import AccountAttentionPage from './components/AccountAttentionPage.svelte';
   import SignOutConfirmDialog from './components/SignOutConfirmDialog.svelte';
+  import AuScopeBanner from './components/AuScopeBanner.svelte';
   import type { ActivationParams } from './components/ActivateDialog.svelte';
   import { Avatar, Button, Badge, Card, Spinner } from './components/ui/index.js';
   import { RefreshCw, Settings, ChevronDown, ChevronRight, Search } from '@lucide/svelte';
@@ -516,6 +517,9 @@
       />
     {:else}
     <main class="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-4">
+      {#if activeAccount}
+        <AuScopeBanner account={activeAccount} {eligibleRoles} {activeAssignments} />
+      {/if}
 
       <!-- Eligible Activations -->
       <section class="flex flex-col gap-2">

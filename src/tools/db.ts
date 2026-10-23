@@ -43,6 +43,10 @@ export interface AccountRecord {
   armAccessToken: string | null;
   /** Epoch milliseconds when armAccessToken expires. */
   armTokenExpiresAt: number | null;
+  /** Space-split `scp` claim of the latest Graph access token. Gates optional features (e.g. AU_SCOPE). */
+  grantedScopes?: string[];
+  /** True once the user chose "Not now" on the admin unit permission banner. */
+  auScopePromptDismissed?: boolean;
 }
 
 /**

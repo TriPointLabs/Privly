@@ -15,7 +15,7 @@ import {
   type ActivatingRecord,
 } from '../tools/db.ts';
 import { notify } from '../tools/notify.ts';
-import { isValidEmail } from '../tools/oauth.ts';
+import { isValidEmail, getScopes } from '../tools/oauth.ts';
 import { sendNotification, type CommandAck, type CommandMessage } from '../types/messages.ts';
 import {
   fetchAccountPhoto,
@@ -23,6 +23,8 @@ import {
   refreshArmToken,
   performSignIn,
   acquireTokenInteractive,
+  scopesFromToken,
+  isConsentError,
 } from './auth.ts';
 import {
   runSyncCycle,
@@ -166,7 +168,7 @@ async function handleActivate(kind: 'role' | 'group', params: ActivateParams): P
   if (activeToken !== account.accessToken) {
     const stepUpDb = await getDB();
     const current = await stepUpDb.get('accounts', accountId);
-    if (current) await stepUpDb.put('accounts', { ...current, accessToken: activeToken });
+    if (current) await stepUpDb.put('accounts', { ...current, accessToken: activeToken, grantedScopes: scopesFromToken(activeToken) });
   }
 
   const resBody = await res.json() as { id?: string; status?: string };
@@ -420,8 +422,10 @@ async function handleSignInNew(payload: CommandPayload<'SIGN_IN_NEW'>): Promise<
       graphHost: discovery.graphHost,
       tokenEndpoint: discovery.tokenEndpoint,
       accessToken: tokens.accessToken,
+      grantedScopes: scopesFromToken(tokens.accessToken),
       refreshToken: tokens.refreshToken,
       tokenExpiresAt: tokens.tokenExpiresAt,
+      auScopePromptDismissed: existing?.auScopePromptDismissed,
       // Preserve the user's preference on re-sign-in; default false for new accounts.
       showPermanentAssignments: existing?.showPermanentAssignments ?? false,
       // ARM token fields -- populated shortly after sign-in via refreshArmToken.
@@ -480,6 +484,39 @@ async function handleSignInInteractive(payload: CommandPayload<'SIGN_IN_INTERACT
     log('error', 'account', `Interactive re-auth failed for ${maskUpn(account.userPrincipalName)}: ${error}`);
     return { ok: false, error };
   }
+}
+
+/** GRANT_AU_SCOPE -- interactively request the optional AU scope, then resync so admin unit names resolve. */
+async function handleGrantAuScope(payload: CommandPayload<'GRANT_AU_SCOPE'>): Promise<CommandAck> {
+  const { accountId } = payload;
+  const db = await getDB();
+  const account = await db.get('accounts', accountId);
+  if (!account) return { ok: false, error: 'Account not found' };
+  try {
+    await acquireTokenInteractive(account, undefined, getScopes(account.cloud, { includeOptional: true }), 'graph');
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    log('warn', 'account', `AU scope grant failed for ${maskUpn(account.userPrincipalName)}: ${error}`);
+    if (isConsentError(e)) {
+      return { ok: false, error: 'An administrator must approve this permission. Share the admin consent link from the sign-in page with them.' };
+    }
+    return { ok: false, error };
+  }
+  const freshDb = await getDB();
+  const fresh = await freshDb.get('accounts', accountId);
+  if (!fresh) return { ok: false, error: 'Account not found' };
+  // Clicking Enable (banner or Settings) brings the banner back into play if it was dismissed earlier.
+  const updated = { ...fresh, auScopePromptDismissed: false };
+  await freshDb.put('accounts', updated);
+  notifyDbChanged('accounts');
+  // The grant itself succeeded; a sync failure only delays the names until the next cycle.
+  try {
+    await syncRoleAssignments(updated, { force: true });
+    await syncActiveAssignments(updated);
+  } catch (e) {
+    log('warn', 'sync', `Resync after AU scope grant failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  return { ok: true };
 }
 
 /** SIGN_OUT -- delete the account and all associated FK records. */
@@ -684,6 +721,7 @@ const commandHandlers: {
 } = {
   SIGN_IN_NEW: handleSignInNew,
   SIGN_IN_INTERACTIVE: handleSignInInteractive,
+  GRANT_AU_SCOPE: handleGrantAuScope,
   SIGN_OUT: handleSignOut,
   TEST_NOTIFICATION: handleTestNotification,
   UPDATE_ACCOUNT_SETTING: handleUpdateAccountSetting,

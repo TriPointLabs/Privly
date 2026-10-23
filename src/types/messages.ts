@@ -72,6 +72,7 @@ export const MessageType = {
   TRIGGER_SYNC: 'TRIGGER_SYNC',
   SIGN_IN_NEW: 'SIGN_IN_NEW',
   SIGN_IN_INTERACTIVE: 'SIGN_IN_INTERACTIVE',
+  GRANT_AU_SCOPE: 'GRANT_AU_SCOPE',
   SIGN_OUT: 'SIGN_OUT',
   UPDATE_EXTENSION_SETTING: 'UPDATE_EXTENSION_SETTING',
   UPDATE_ACCOUNT_SETTING: 'UPDATE_ACCOUNT_SETTING',
@@ -103,9 +104,10 @@ interface CommandPayloadMap {
   [MessageType.TRIGGER_SYNC]: Record<string, never>;
   [MessageType.SIGN_IN_NEW]: { username: string; tenantId?: string };
   [MessageType.SIGN_IN_INTERACTIVE]: { accountId: string };
+  [MessageType.GRANT_AU_SCOPE]: { accountId: string };
   [MessageType.SIGN_OUT]: { accountId: string };
   [MessageType.UPDATE_EXTENSION_SETTING]: { patch: Partial<Omit<ExtensionSettingsRecord, 'id'>> };
-  [MessageType.UPDATE_ACCOUNT_SETTING]: { accountId: string; patch: { showPermanentAssignments?: boolean } };
+  [MessageType.UPDATE_ACCOUNT_SETTING]: { accountId: string; patch: { showPermanentAssignments?: boolean; auScopePromptDismissed?: boolean } };
   [MessageType.TEST_NOTIFICATION]: Record<string, never>;
   [MessageType.ACTIVATE_ROLE]: { accountId: string; roleId: string; justification?: string; durationMinutes: number; ticketNumber?: string; ticketSystem?: string; savePrefill?: boolean };
   [MessageType.DEACTIVATE_ROLE]: { accountId: string; activationId: string };

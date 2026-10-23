@@ -45,6 +45,8 @@ There is no lint script; typecheck + build are the gates after every change.
 - Service worker registers all event listeners at top level (MV3 requirement)
 - Never use `console.*` in `src/` -- use `log()` from `src/background/log.ts` (see Logging)
 - Don't use em dashes anywhere
+- Optional Graph scopes (`AU_SCOPE` via `getScopes(cloud, { includeOptional: true })`) are requested only at first sign-in and by `GRANT_AU_SCOPE`; refresh, silent SSO and step-up flows use base scopes
+- `AccountRecord.grantedScopes` mirrors the Graph token's `scp` claim and gates optional features (e.g. AU name resolution)
 - When producing content, do not split sentences in comments over multiple lines purely for length reasons. It is fine for code but only do this for readability benefits where it makes sense.
 
 ## CRITICAL: State Sharing Architecture

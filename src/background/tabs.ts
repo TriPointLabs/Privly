@@ -114,8 +114,12 @@ async function clearCookiesForUrl(url: string): Promise<void> {
  * discarded only when the tab closes, and no extension API can clear it for a
  * page. A portal that caches role state there will not reflect the change until
  * the tab is closed and reopened.
+ *
+ * Open Azure portal tabs are also reloaded without clearing storage, same as after an Azure activation.
  */
 export async function refreshAdminPortalTabs(): Promise<void> {
+  await refreshAzurePortalTabs();
+
   const tabs = await browser.tabs.query({ url: ADMIN_PORTAL_PATTERNS });
   log('info', 'general', `refreshAdminPortalTabs: ${tabs.length} matching tab(s)`);
 
